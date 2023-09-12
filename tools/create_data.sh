@@ -1,4 +1,4 @@
-#! /usr/bash
+#!/usr/bin/env bash
 
 python tools/data_converter/vad_nuscenes_converter.py \
  nuscenes \

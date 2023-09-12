@@ -1,6 +1,14 @@
 {
   "configurations": [
     {
+      "name": "Python: Current File",
+      "type": "python",
+      "request": "launch",
+      "program": "${file}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
       "name": "create data",
       "type": "python",
       "request": "launch",
@@ -10,13 +18,13 @@
       "args": [
         "nuscenes",
         "--root-path",
-        "./data/nuscenes/trainval",
+        "./data/nuscenes/trainval/mini",
         "--out-dir",
         "./data/nuscenes/trainval/infos",
         "--extra-tag",
         "vad_nuscenes",
         "--version",
-        "v1.0",
+        "v1.0-mini",
         "--canbus",
         "./data/nuscenes/trainval",
       ]

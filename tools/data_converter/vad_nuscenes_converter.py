@@ -42,7 +42,7 @@ def locate_message(utimes, utime):
         i -= 1
     return i
 
-
+# main func
 def create_nuscenes_infos(root_path,
                           out_path,
                           can_bus_root_path,
@@ -66,6 +66,8 @@ def create_nuscenes_infos(root_path,
     print(version, root_path)
     nusc = NuScenes(version=version, dataroot=root_path, verbose=True)
     nusc_can_bus = NuScenesCanBus(dataroot=can_bus_root_path)
+
+    # split dataset to get scenes by defined version.
     from nuscenes.utils import splits
     available_vers = ['v1.0-trainval', 'v1.0-test', 'v1.0-mini']
     assert version in available_vers
@@ -87,6 +89,7 @@ def create_nuscenes_infos(root_path,
     train_scenes = list(
         filter(lambda x: x in available_scene_names, train_scenes))
     val_scenes = list(filter(lambda x: x in available_scene_names, val_scenes))
+    # get scenes token
     train_scenes = set([
         available_scenes[available_scene_names.index(s)]['token']
         for s in train_scenes
@@ -182,8 +185,8 @@ def _get_can_bus_info(nusc, nusc_can_bus, sample):
             break
         last_pose = pose
     _ = last_pose.pop('utime')  # useless
-    pos = last_pose.pop('pos')
-    rotation = last_pose.pop('orientation')
+    pos = last_pose.pop('pos')  # 3
+    rotation = last_pose.pop('orientation')  # 3
     can_bus.extend(pos)
     can_bus.extend(rotation)
     for key in last_pose.keys():
@@ -191,7 +194,7 @@ def _get_can_bus_info(nusc, nusc_can_bus, sample):
     can_bus.extend([0., 0.])
     return np.array(can_bus)
 
-
+# fill train and val info
 def _fill_trainval_infos(nusc,
                          nusc_can_bus,
                          train_scenes,
@@ -218,16 +221,17 @@ def _fill_trainval_infos(nusc,
     val_nusc_infos = []
     frame_idx = 0
     cat2idx = {}
+    # total category 23; category to index.
     for idx, dic in enumerate(nusc.category):
         cat2idx[dic['name']] = idx
 
     for sample in mmcv.track_iter_progress(nusc.sample):
-        map_location = nusc.get('log', nusc.get('scene', sample['scene_token'])['log_token'])['location']
+        map_location = nusc.get('log', nusc.get('scene', sample['scene_token'])['log_token'])['location'] # Area where log was captured, e.g. singapore-onenorth.
         lidar_token = sample['data']['LIDAR_TOP']
         sd_rec = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
         cs_record = nusc.get('calibrated_sensor',
-                             sd_rec['calibrated_sensor_token'])
-        pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])
+                             sd_rec['calibrated_sensor_token'])  # 相对于自车的位移与旋转
+        pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])  # 相对于世界坐标系
         if sample['prev'] != '':
             sample_prev = nusc.get('sample', sample['prev'])
             sd_rec_prev = nusc.get('sample_data', sample_prev['data']['LIDAR_TOP'])
@@ -241,10 +245,12 @@ def _fill_trainval_infos(nusc,
         else:
             pose_record_next = None
 
-        lidar_path, boxes, _ = nusc.get_sample_data(lidar_token)
+        lidar_path, boxes, _ = nusc.get_sample_data(lidar_token)  # lidar感知点的bbox
 
         mmcv.check_file_exist(lidar_path)
-        can_bus = _get_can_bus_info(nusc, nusc_can_bus, sample)
+        can_bus = _get_can_bus_info(nusc, nusc_can_bus, sample)  # 只拿当前帧之前的最近那一帧的can feature
+        
+        # 拿到第6s那一帧的sample，如果6s内某一帧不存在，fut_valid_flag赋值False
         fut_valid_flag = True
         test_sample = copy.deepcopy(sample)
         for i in range(fut_ts):
@@ -252,7 +258,7 @@ def _fill_trainval_infos(nusc,
                 test_sample = nusc.get('sample', test_sample['next'])
             else:
                 fut_valid_flag = False
-        ##
+        ## basic info
         info = {
             'lidar_path': lidar_path,
             'token': sample['token'],
@@ -319,7 +325,7 @@ def _fill_trainval_infos(nusc,
                 nusc.get('sample_annotation', token)
                 for token in sample['anns']
             ]
-            locs = np.array([b.center for b in boxes]).reshape(-1, 3)
+            locs = np.array([b.center for b in boxes]).reshape(-1, 3)  # lidar感知到的boxes
             dims = np.array([b.wlh for b in boxes]).reshape(-1, 3)
             rots = np.array([b.orientation.yaw_pitch_roll[0]
                              for b in boxes]).reshape(-1, 1)
@@ -329,7 +335,7 @@ def _fill_trainval_infos(nusc,
                 [(anno['num_lidar_pts'] + anno['num_radar_pts']) > 0
                  for anno in annotations],
                 dtype=bool).reshape(-1)
-            # convert velo from global to lidar
+            # convert velo from global to ego to lidar
             for i in range(len(boxes)):
                 velo = np.array([*velocity[i], 0.0])
                 velo = velo @ np.linalg.inv(e2g_r_mat).T @ np.linalg.inv(
@@ -370,10 +376,10 @@ def _fill_trainval_infos(nusc,
                         box_next = Box(
                             anno_next['translation'], anno_next['size'], Quaternion(anno_next['rotation'])
                         )
-                        # Move box to ego vehicle coord system.
+                        # Move box global to ego vehicle coord system.
                         box_next.translate(-np.array(pose_record['translation']))
                         box_next.rotate(Quaternion(pose_record['rotation']).inverse)
-                        #  Move box to sensor coord system.
+                        #  Move box ego to sensor coord system（lidar）.
                         box_next.translate(-np.array(cs_record['translation']))
                         box_next.rotate(Quaternion(cs_record['rotation']).inverse)
                         gt_fut_trajs[i, j] = box_next.center[:2] - cur_box.center[:2]
