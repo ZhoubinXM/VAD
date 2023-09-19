@@ -57,15 +57,15 @@ class LaneNet(nn.Module):
         Returns:
             inst_lane_feats: [batch size, max_pnum, D]
         '''
-        x = pts_lane_feats
+        x = pts_lane_feats  # [1, 100, 20, 256]
         for name, layer in self.layer_seq.named_modules():
             if isinstance(layer, MLP):
                 # x [bs,max_lane_num,9,dim]
-                x = layer(x)
-                x_max = torch.max(x, -2)[0]
-                x_max = x_max.unsqueeze(2).repeat(1, 1, x.shape[2], 1)
-                x = torch.cat([x, x_max], dim=-1)
-        x_max = torch.max(x, -2)[0]
+                x = layer(x) # 1, 100, 20, 128
+                x_max = torch.max(x, -2)[0] # [1,100,128]， 拿到每个vector中最具代表性的point的隐藏向量
+                x_max = x_max.unsqueeze(2).repeat(1, 1, x.shape[2], 1) #[1,100,20, 128]
+                x = torch.cat([x, x_max], dim=-1) # [1, 100, 20, 256]
+        x_max = torch.max(x, -2)[0] # [1, 100, 256] 拿到每个vector中最具代表性的point的隐藏向量
         return x_max
 
 
@@ -502,22 +502,22 @@ class VADHead(DETRHead):
                 Shape [nb_dec, bs, num_query, 9].
         """
         
-        bs, num_cam, _, _, _ = mlvl_feats[0].shape
+        bs, num_cam, _, _, _ = mlvl_feats[0].shape  # mlvl_feats list([1,6,256,12,20])
         dtype = mlvl_feats[0].dtype
-        object_query_embeds = self.query_embedding.weight.to(dtype)
+        object_query_embeds = self.query_embedding.weight.to(dtype) # query [300, 256*2]
         
         if self.map_query_embed_type == 'all_pts':
             map_query_embeds = self.map_query_embedding.weight.to(dtype)
         elif self.map_query_embed_type == 'instance_pts':
-            map_pts_embeds = self.map_pts_embedding.weight.unsqueeze(0)
-            map_instance_embeds = self.map_instance_embedding.weight.unsqueeze(1)
-            map_query_embeds = (map_pts_embeds + map_instance_embeds).flatten(0, 1).to(dtype)
+            map_pts_embeds = self.map_pts_embedding.weight.unsqueeze(0) # map points/vector query [1,20,512]
+            map_instance_embeds = self.map_instance_embedding.weight.unsqueeze(1) # map vector query [100,1,512]
+            map_query_embeds = (map_pts_embeds + map_instance_embeds).flatten(0, 1).to(dtype) # 每个点的query [2000, 512]
 
-        bev_queries = self.bev_embedding.weight.to(dtype)
+        bev_queries = self.bev_embedding.weight.to(dtype)  # [100*100, 256]
 
         bev_mask = torch.zeros((bs, self.bev_h, self.bev_w),
-                               device=bev_queries.device).to(dtype)
-        bev_pos = self.positional_encoding(bev_mask).to(dtype)
+                               device=bev_queries.device).to(dtype)  #[1,100,100]
+        bev_pos = self.positional_encoding(bev_mask).to(dtype)  #[1,256,100,100]
             
         if only_bev:  # only use encoder to obtain BEV features, TODO: refine the workaround
             return self.transformer.get_bev_features(
@@ -551,9 +551,9 @@ class VADHead(DETRHead):
         )
 
         bev_embed, hs, init_reference, inter_references, \
-            map_hs, map_init_reference, map_inter_references = outputs
-
-        hs = hs.permute(0, 2, 1, 3)
+            map_hs, map_init_reference, map_inter_references = outputs 
+        # [10000,1,256] / [3,300,1,256] / [1,300,3] / [3,1,300,3] / [2000,1,256] / [1,2000,2] / [3,1,2000,2]
+        hs = hs.permute(0, 2, 1, 3) # [3, 1, 300, 256]
         outputs_classes = []
         outputs_coords = []
         outputs_coords_bev = []
@@ -607,95 +607,95 @@ class VADHead(DETRHead):
             # TODO: check the shape of reference
             assert reference.shape[-1] == 2
             tmp[..., 0:2] += reference[..., 0:2]
-            tmp = tmp.sigmoid() # cx,cy,w,h
-            map_outputs_coord, map_outputs_pts_coord = self.map_transform_box(tmp)
-            map_outputs_coords_bev.append(map_outputs_pts_coord.clone().detach())
-            map_outputs_classes.append(map_outputs_class)
-            map_outputs_coords.append(map_outputs_coord)
-            map_outputs_pts_coords.append(map_outputs_pts_coord)
+            tmp = tmp.sigmoid() # cx,cy,w,h [1, 2000,2]
+            map_outputs_coord, map_outputs_pts_coord = self.map_transform_box(tmp) #[1,100,4] / [1,100,20,2]
+            map_outputs_coords_bev.append(map_outputs_pts_coord.clone().detach()) # 点列 [1,100,20,2]
+            map_outputs_classes.append(map_outputs_class) # [1, 100, 3]
+            map_outputs_coords.append(map_outputs_coord) # bbox [1,100,4]
+            map_outputs_pts_coords.append(map_outputs_pts_coord) # [1,100,20,2]
             
         if self.motion_decoder is not None:
-            batch_size, num_agent = outputs_coords_bev[-1].shape[:2]
+            batch_size, num_agent = outputs_coords_bev[-1].shape[:2]  #[1,300,2]
             # motion_query
-            motion_query = hs[-1].permute(1, 0, 2)  # [A, B, D]
-            mode_query = self.motion_mode_query.weight  # [fut_mode, D]
-            # [M, B, D], M=A*fut_mode
+            motion_query = hs[-1].permute(1, 0, 2)  # [A, B, D] [300, 1, 256]
+            mode_query = self.motion_mode_query.weight  # [fut_mode, D] [6, 256]
+            # [M, B, D], M=A*fut_mode [300*6, 1, 256]
             motion_query = (motion_query[:, None, :, :] + mode_query[None, :, None, :]).flatten(0, 1)
             if self.use_pe:
-                motion_coords = outputs_coords_bev[-1]  # [B, A, 2]
-                motion_pos = self.pos_mlp_sa(motion_coords)  # [B, A, D]
-                motion_pos = motion_pos.unsqueeze(2).repeat(1, 1, self.fut_mode, 1).flatten(1, 2)
-                motion_pos = motion_pos.permute(1, 0, 2)  # [M, B, D]
+                motion_coords = outputs_coords_bev[-1]  # [B, A, 2] [1, 300, 2]
+                motion_pos = self.pos_mlp_sa(motion_coords)  # [B, A, D] 线性层投影 [1, 300, 256]
+                motion_pos = motion_pos.unsqueeze(2).repeat(1, 1, self.fut_mode, 1).flatten(1, 2) # [1.300*6, 256]
+                motion_pos = motion_pos.permute(1, 0, 2)  # [M, B, D] [300*6, 1, 256]
             else:
                 motion_pos = None
 
             if self.motion_det_score is not None:
-                motion_score = outputs_classes[-1]
-                max_motion_score = motion_score.max(dim=-1)[0]
-                invalid_motion_idx = max_motion_score < self.motion_det_score  # [B, A]
-                invalid_motion_idx = invalid_motion_idx.unsqueeze(2).repeat(1, 1, self.fut_mode).flatten(1, 2)
+                motion_score = outputs_classes[-1] # [1, 300, 10] det 预测10个类别
+                max_motion_score = motion_score.max(dim=-1)[0] # 【1,300] 取值
+                invalid_motion_idx = max_motion_score < self.motion_det_score  # [B, A] [1, 300]
+                invalid_motion_idx = invalid_motion_idx.unsqueeze(2).repeat(1, 1, self.fut_mode).flatten(1, 2) #[1, 1800]
             else:
                 invalid_motion_idx = None
-
+            # self attention
             motion_hs = self.motion_decoder(
-                query=motion_query,
-                key=motion_query,
+                query=motion_query, # [1800, 1, 256]
+                key=motion_query, 
                 value=motion_query,
-                query_pos=motion_pos,
+                query_pos=motion_pos, # [1800, 1, 256]
                 key_pos=motion_pos,
-                key_padding_mask=invalid_motion_idx)
+                key_padding_mask=invalid_motion_idx) # [1, 1800]
 
             if self.motion_map_decoder is not None:
                 # map preprocess
                 motion_coords = outputs_coords_bev[-1]  # [B, A, 2]
-                motion_coords = motion_coords.unsqueeze(2).repeat(1, 1, self.fut_mode, 1).flatten(1, 2)
-                map_query = map_hs[-1].view(batch_size, self.map_num_vec, self.map_num_pts_per_vec, -1)
-                map_query = self.lane_encoder(map_query)  # [B, P, pts, D] -> [B, P, D]
-                map_score = map_outputs_classes[-1]
-                map_pos = map_outputs_coords_bev[-1]
+                motion_coords = motion_coords.unsqueeze(2).repeat(1, 1, self.fut_mode, 1).flatten(1, 2) # [1, 1800, 2]
+                map_query = map_hs[-1].view(batch_size, self.map_num_vec, self.map_num_pts_per_vec, -1) # [1,100, 20, 256]
+                map_query = self.lane_encoder(map_query)  # [B, P, pts, D] -> [B, P, D] [1,100,256] vectorNet
+                map_score = map_outputs_classes[-1] # [1,100,3]
+                map_pos = map_outputs_coords_bev[-1] # [1, 100, 20, 2]
                 map_query, map_pos, key_padding_mask = self.select_and_pad_pred_map(
                     motion_coords, map_query, map_score, map_pos,
                     map_thresh=self.map_thresh, dis_thresh=self.dis_thresh,
-                    pe_normalization=self.pe_normalization, use_fix_pad=True)
+                    pe_normalization=self.pe_normalization, use_fix_pad=True) #[1800,1,256] [1800,1,2] [1800,1]
                 map_query = map_query.permute(1, 0, 2)  # [P, B*M, D]
-                ca_motion_query = motion_hs.permute(1, 0, 2).flatten(0, 1).unsqueeze(0)
+                ca_motion_query = motion_hs.permute(1, 0, 2).flatten(0, 1).unsqueeze(0) # [1,1800,256]
 
                 # position encoding
                 if self.use_pe:
                     (num_query, batch) = ca_motion_query.shape[:2] 
                     motion_pos = torch.zeros((num_query, batch, 2), device=motion_hs.device)
-                    motion_pos = self.pos_mlp(motion_pos)
-                    map_pos = map_pos.permute(1, 0, 2)
-                    map_pos = self.pos_mlp(map_pos)
+                    motion_pos = self.pos_mlp(motion_pos) # [1,1800,256]
+                    map_pos = map_pos.permute(1, 0, 2) #[1,1800,256]
+                    map_pos = self.pos_mlp(map_pos) # [1800,256]
                 else:
                     motion_pos, map_pos = None, None
-                
+                # corss attention
                 ca_motion_query = self.motion_map_decoder(
                     query=ca_motion_query,
                     key=map_query,
                     value=map_query,
                     query_pos=motion_pos,
                     key_pos=map_pos,
-                    key_padding_mask=key_padding_mask)
+                    key_padding_mask=key_padding_mask) # [1, 1800, 256]
             else:
                 ca_motion_query = motion_hs.permute(1, 0, 2).flatten(0, 1).unsqueeze(0)
 
             batch_size = outputs_coords_bev[-1].shape[0]
             motion_hs = motion_hs.permute(1, 0, 2).unflatten(
                 dim=1, sizes=(num_agent, self.fut_mode)
-            )
+            ) # [1, 300, 6, 256]
             ca_motion_query = ca_motion_query.squeeze(0).unflatten(
                 dim=0, sizes=(batch_size, num_agent, self.fut_mode)
-            )
-            motion_hs = torch.cat([motion_hs, ca_motion_query], dim=-1)  # [B, A, fut_mode, 2D]
+            ) # [1, 300, 6, 256]
+            motion_hs = torch.cat([motion_hs, ca_motion_query], dim=-1)  # [B, A, fut_mode, 2D] # [1, 300, 6, 512]
         else:
             raise NotImplementedError('Not implement yet')
 
-        outputs_traj = self.traj_branches[0](motion_hs)
+        outputs_traj = self.traj_branches[0](motion_hs) # [1, 300, 6, 12]
         outputs_trajs.append(outputs_traj)
-        outputs_traj_class = self.traj_cls_branches[0](motion_hs)
+        outputs_traj_class = self.traj_cls_branches[0](motion_hs) # [1, 300, 6, 1]
         outputs_trajs_classes.append(outputs_traj_class.squeeze(-1))
-        (batch, num_agent) = motion_hs.shape[:2]
+        (batch, num_agent) = motion_hs.shape[:2] # [1, 300, 6, 512]
              
         map_outputs_classes = torch.stack(map_outputs_classes)
         map_outputs_coords = torch.stack(map_outputs_coords)
@@ -789,9 +789,9 @@ class VADHead(DETRHead):
             )  # [B, 1, 2D]  
 
         # Ego prediction
-        outputs_ego_trajs = self.ego_fut_decoder(ego_feats)
+        outputs_ego_trajs = self.ego_fut_decoder(ego_feats)  # [1,1,36]
         outputs_ego_trajs = outputs_ego_trajs.reshape(outputs_ego_trajs.shape[0], 
-                                                      self.ego_fut_mode, self.fut_ts, 2)
+                                                      self.ego_fut_mode, self.fut_ts, 2) # [1,3,6,2]
 
         outs = {
             'bev_embed': bev_embed,
@@ -826,18 +826,18 @@ class VADHead(DETRHead):
             The bbox [cx, cy, w, h] transformed from points.
         """
         pts_reshape = pts.view(pts.shape[0], self.map_num_vec,
-                                self.map_num_pts_per_vec,2)
-        pts_y = pts_reshape[:, :, :, 0] if y_first else pts_reshape[:, :, :, 1]
-        pts_x = pts_reshape[:, :, :, 1] if y_first else pts_reshape[:, :, :, 0]
+                                self.map_num_pts_per_vec,2)  #[1,100,20,2]
+        pts_y = pts_reshape[:, :, :, 0] if y_first else pts_reshape[:, :, :, 1] #[1,100,20]
+        pts_x = pts_reshape[:, :, :, 1] if y_first else pts_reshape[:, :, :, 0] #[1,100,20]
         if self.map_transform_method == 'minmax':
             # import pdb;pdb.set_trace()
 
-            xmin = pts_x.min(dim=2, keepdim=True)[0]
+            xmin = pts_x.min(dim=2, keepdim=True)[0] #[1,100,1]
             xmax = pts_x.max(dim=2, keepdim=True)[0]
             ymin = pts_y.min(dim=2, keepdim=True)[0]
             ymax = pts_y.max(dim=2, keepdim=True)[0]
-            bbox = torch.cat([xmin, ymin, xmax, ymax], dim=2)
-            bbox = bbox_xyxy_to_cxcywh(bbox)
+            bbox = torch.cat([xmin, ymin, xmax, ymax], dim=2) #[1,100,4]
+            bbox = bbox_xyxy_to_cxcywh(bbox) #[1,100,4]
         else:
             raise NotImplementedError
         return bbox, pts_reshape
@@ -850,7 +850,7 @@ class VADHead(DETRHead):
                            gt_attr_labels,
                            gt_bboxes_ignore=None):
         """"Compute regression and classification targets for one image.
-        Outputs from a single decoder layer of a single feature level are used.
+        Outputs from a single decoder layer of a single feature level are used. 针对于每张图片
         Args:
             cls_score (Tensor): Box score logits from a single decoder layer
                 for one image. Shape [num_query, cls_out_channels].
@@ -873,18 +873,18 @@ class VADHead(DETRHead):
                 - neg_inds (Tensor): Sampled negative indices for each image.
         """
 
-        num_bboxes = bbox_pred.size(0)
-        # assigner and sampler
+        num_bboxes = bbox_pred.size(0) # [300,10]
+        # assigner and sampler [13, 34] -> [13, 12] [13, 6]
         gt_fut_trajs = gt_attr_labels[:, :self.fut_ts*2]
         gt_fut_masks = gt_attr_labels[:, self.fut_ts*2:self.fut_ts*3]
         gt_bbox_c = gt_bboxes.shape[-1]
         num_gt_bbox, gt_traj_c = gt_fut_trajs.shape
 
         assign_result = self.assigner.assign(bbox_pred, cls_score, gt_bboxes,
-                                             gt_labels, gt_bboxes_ignore)
+                                             gt_labels, gt_bboxes_ignore) # 将bbox与pred bbox一一对应
 
         sampling_result = self.sampler.sample(assign_result, bbox_pred,
-                                              gt_bboxes)
+                                              gt_bboxes) # 区分positive case 对应上的 与对应不上的
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
 
@@ -892,27 +892,27 @@ class VADHead(DETRHead):
         labels = gt_bboxes.new_full((num_bboxes,),
                                     self.num_classes,
                                     dtype=torch.long)
-        labels[pos_inds] = gt_labels[sampling_result.pos_assigned_gt_inds]
+        labels[pos_inds] = gt_labels[sampling_result.pos_assigned_gt_inds] # 按照顺序赋值
         label_weights = gt_bboxes.new_ones(num_bboxes)
 
-        # bbox targets
-        bbox_targets = torch.zeros_like(bbox_pred)[..., :gt_bbox_c]
-        bbox_weights = torch.zeros_like(bbox_pred)
+        # bbox targets 给匹配到的障碍物赋值
+        bbox_targets = torch.zeros_like(bbox_pred)[..., :gt_bbox_c] # [300, 9]
+        bbox_weights = torch.zeros_like(bbox_pred) # [300,10]
         bbox_weights[pos_inds] = 1.0
 
-        # trajs targets
+        # trajs targets 给匹配到的障碍物赋值
         traj_targets = torch.zeros((num_bboxes, gt_traj_c), dtype=torch.float32, device=bbox_pred.device)
         traj_weights = torch.zeros_like(traj_targets)
         traj_targets[pos_inds] = gt_fut_trajs[sampling_result.pos_assigned_gt_inds]
         traj_weights[pos_inds] = 1.0
 
-        # Filter out invalid fut trajs
+        # Filter out invalid fut trajs 给匹配到的障碍物的轨迹mask赋值
         traj_masks = torch.zeros_like(traj_targets)  # [num_bboxes, fut_ts*2]
         gt_fut_masks = gt_fut_masks.unsqueeze(-1).repeat(1, 1, 2).view(num_gt_bbox, -1)  # [num_gt_bbox, fut_ts*2]
         traj_masks[pos_inds] = gt_fut_masks[sampling_result.pos_assigned_gt_inds]
         traj_weights = traj_weights * traj_masks
 
-        # Extra future timestamp mask for controlling pred horizon
+        # Extra future timestamp mask for controlling pred horizon， 通过self.valid_fut_ts控制要预测的时长
         fut_ts_mask = torch.zeros((num_bboxes, self.fut_ts, 2),
                                    dtype=torch.float32, device=bbox_pred.device)
         fut_ts_mask[:, :self.valid_fut_ts, :] = 1.0
@@ -1192,7 +1192,7 @@ class VADHead(DETRHead):
                     gt_attr_labels_list,
                     gt_bboxes_ignore_list=None):
         """"Loss function for outputs from a single decoder layer of a single
-        feature level.
+        feature level.  计算某一层的输出
         Args:
             cls_scores (Tensor): Box score logits from a single decoder layer
                 for all images. Shape [bs, num_query, cls_out_channels].
@@ -1209,9 +1209,9 @@ class VADHead(DETRHead):
             dict[str, Tensor]: A dictionary of loss components for outputs from
                 a single decoder layer.
         """
-        num_imgs = cls_scores.size(0)
-        cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
-        bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
+        num_imgs = cls_scores.size(0) # [1, 300, 10]
+        cls_scores_list = [cls_scores[i] for i in range(num_imgs)] #list([300,10])
+        bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)] #list([300,10])
         cls_reg_targets = self.get_targets(cls_scores_list, bbox_preds_list,
                                            gt_bboxes_list, gt_labels_list,
                                            gt_attr_labels_list, gt_bboxes_ignore_list)
@@ -1220,23 +1220,23 @@ class VADHead(DETRHead):
          traj_targets_list, traj_weights_list, gt_fut_masks_list,
          num_total_pos, num_total_neg) = cls_reg_targets
 
-        labels = torch.cat(labels_list, 0)
-        label_weights = torch.cat(label_weights_list, 0)
-        bbox_targets = torch.cat(bbox_targets_list, 0)
-        bbox_weights = torch.cat(bbox_weights_list, 0)
-        traj_targets = torch.cat(traj_targets_list, 0)
-        traj_weights = torch.cat(traj_weights_list, 0)
-        gt_fut_masks = torch.cat(gt_fut_masks_list, 0)
+        labels = torch.cat(labels_list, 0) #[300]
+        label_weights = torch.cat(label_weights_list, 0) #[300]
+        bbox_targets = torch.cat(bbox_targets_list, 0) #[300,9]
+        bbox_weights = torch.cat(bbox_weights_list, 0) #[300,10]
+        traj_targets = torch.cat(traj_targets_list, 0) #[300,12]
+        traj_weights = torch.cat(traj_weights_list, 0) # [300,12]
+        gt_fut_masks = torch.cat(gt_fut_masks_list, 0) # [300,6]
 
         # classification loss
-        cls_scores = cls_scores.reshape(-1, self.cls_out_channels)
+        cls_scores = cls_scores.reshape(-1, self.cls_out_channels) # [300,10]
         # construct weighted avg_factor to match with the official DETR repo
         cls_avg_factor = num_total_pos * 1.0 + \
             num_total_neg * self.bg_cls_weight
         if self.sync_cls_avg_factor:
             cls_avg_factor = reduce_mean(
                 cls_scores.new_tensor([cls_avg_factor]))
-
+        # 分类loss的计算 focal loss
         cls_avg_factor = max(cls_avg_factor, 1)
         loss_cls = self.loss_cls(cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
 
@@ -1245,11 +1245,11 @@ class VADHead(DETRHead):
         num_total_pos = loss_cls.new_tensor([num_total_pos])
         num_total_pos = torch.clamp(reduce_mean(num_total_pos), min=1).item()
 
-        # regression L1 loss
+        # regression L1 loss 回归loss的计算
         bbox_preds = bbox_preds.reshape(-1, bbox_preds.size(-1))
-        normalized_bbox_targets = normalize_bbox(bbox_targets, self.pc_range)
+        normalized_bbox_targets = normalize_bbox(bbox_targets, self.pc_range) # [300, 10]
         isnotnan = torch.isfinite(normalized_bbox_targets).all(dim=-1)
-        bbox_weights = bbox_weights * self.code_weights
+        bbox_weights = bbox_weights * self.code_weights # 每个类别的权重 now same with 1
         loss_bbox = self.loss_bbox(
             bbox_preds[isnotnan, :10],
             normalized_bbox_targets[isnotnan, :10],
@@ -1259,26 +1259,26 @@ class VADHead(DETRHead):
         # traj regression loss
         best_traj_preds = self.get_best_fut_preds(
             traj_preds.reshape(-1, self.fut_mode, self.fut_ts, 2),
-            traj_targets.reshape(-1, self.fut_ts, 2), gt_fut_masks)
+            traj_targets.reshape(-1, self.fut_ts, 2), gt_fut_masks) # [300,12]
 
         neg_inds = (bbox_weights[:, 0] == 0)
         traj_labels = self.get_traj_cls_target(
             traj_preds.reshape(-1, self.fut_mode, self.fut_ts, 2),
             traj_targets.reshape(-1, self.fut_ts, 2),
             gt_fut_masks, neg_inds)
-
+        # 回归loss L1 loss
         loss_traj = self.loss_traj(
             best_traj_preds[isnotnan],
             traj_targets[isnotnan],
-            traj_weights[isnotnan],
+            traj_weights[isnotnan], # [300, 12] -> [13, 12], 每个点是否可用的mask
             avg_factor=num_total_pos)
 
         if self.use_traj_lr_warmup:
             loss_scale_factor = get_traj_warmup_loss_weight(self.epoch, self.tot_epoch)
             loss_traj = loss_scale_factor * loss_traj
 
-        # traj classification loss
-        traj_cls_scores = traj_cls_preds.reshape(-1, self.fut_mode)
+        # traj classification loss 轨迹预测分类loss focal loss
+        traj_cls_scores = traj_cls_preds.reshape(-1, self.fut_mode) # [300, 6]
         # construct weighted avg_factor to match with the official DETR repo
         traj_cls_avg_factor = num_total_pos * 1.0 + \
             num_total_neg * self.traj_bg_cls_weight
@@ -1307,7 +1307,7 @@ class VADHead(DETRHead):
         Args:
             traj_preds (Tensor): MultiModal traj preds with shape (num_box_preds, fut_mode, fut_ts, 2).
             traj_targets (Tensor): Ground truth traj for each pred box with shape (num_box_preds, fut_ts, 2).
-            gt_fut_masks (Tensor): Ground truth traj mask with shape (num_box_preds, fut_ts).
+            gt_fut_masks (Tensor): Ground truth traj mask with shape (num_box_preds, fut_ts). 300,6
             pred_box_centers (Tensor): Pred box centers with shape (num_box_preds, 2).
             gt_box_centers (Tensor): Ground truth box centers with shape (num_box_preds, 2).
 
@@ -1316,18 +1316,18 @@ class VADHead(DETRHead):
                 with shape (num_box_preds, fut_ts*2).
         """
 
-        cum_traj_preds = traj_preds.cumsum(dim=-2)
-        cum_traj_targets = traj_targets.cumsum(dim=-2)
+        cum_traj_preds = traj_preds.cumsum(dim=-2) # [300,6,6,2]
+        cum_traj_targets = traj_targets.cumsum(dim=-2) # [300,6,2]
 
         # Get min pred mode indices.
         # (num_box_preds, fut_mode, fut_ts)
-        dist = torch.linalg.norm(cum_traj_targets[:, None, :, :] - cum_traj_preds, dim=-1)
+        dist = torch.linalg.norm(cum_traj_targets[:, None, :, :] - cum_traj_preds, dim=-1) # [300, 6, 6]
         dist = dist * gt_fut_masks[:, None, :]
-        dist = dist[..., -1]
+        dist = dist[..., -1] # [300, 6]
         dist[torch.isnan(dist)] = dist[torch.isnan(dist)] * 0
         min_mode_idxs = torch.argmin(dist, dim=-1).tolist()
-        box_idxs = torch.arange(traj_preds.shape[0]).tolist()
-        best_traj_preds = traj_preds[box_idxs, min_mode_idxs, :, :].reshape(-1, self.fut_ts*2)
+        box_idxs = torch.arange(traj_preds.shape[0]).tolist() # 1 -> 300
+        best_traj_preds = traj_preds[box_idxs, min_mode_idxs, :, :].reshape(-1, self.fut_ts*2) # 选取fde最小的模式
 
         return best_traj_preds
 
@@ -1336,7 +1336,7 @@ class VADHead(DETRHead):
              traj_targets,
              gt_fut_masks,
              neg_inds):
-        """"Get Trajectory mode classification target.
+        """"Get Trajectory mode classification target. 如果是negtive index 赋值index 6
         Args:
             traj_preds (Tensor): MultiModal traj preds with shape (num_box_preds, fut_mode, fut_ts, 2).
             traj_targets (Tensor): Ground truth traj for each pred box with shape (num_box_preds, fut_ts, 2).
@@ -1533,30 +1533,30 @@ class VADHead(DETRHead):
 
         map_gt_vecs_list = copy.deepcopy(map_gt_bboxes_list)
 
-        all_cls_scores = preds_dicts['all_cls_scores']
-        all_bbox_preds = preds_dicts['all_bbox_preds']
-        all_traj_preds = preds_dicts['all_traj_preds']
-        all_traj_cls_scores = preds_dicts['all_traj_cls_scores']
+        all_cls_scores = preds_dicts['all_cls_scores'] # [3,1,100,3]
+        all_bbox_preds = preds_dicts['all_bbox_preds'] # [3,1,100,10]
+        all_traj_preds = preds_dicts['all_traj_preds'] # [3,1,300,6,12]
+        all_traj_cls_scores = preds_dicts['all_traj_cls_scores'] #[3,1,300,6]
         enc_cls_scores = preds_dicts['enc_cls_scores']
         enc_bbox_preds = preds_dicts['enc_bbox_preds']
-        map_all_cls_scores = preds_dicts['map_all_cls_scores']
-        map_all_bbox_preds = preds_dicts['map_all_bbox_preds']
-        map_all_pts_preds = preds_dicts['map_all_pts_preds']
+        map_all_cls_scores = preds_dicts['map_all_cls_scores'] # [3,1,100,3]
+        map_all_bbox_preds = preds_dicts['map_all_bbox_preds'] # [3,1,100,4]
+        map_all_pts_preds = preds_dicts['map_all_pts_preds'] # [3,1,100,20,2]
         map_enc_cls_scores = preds_dicts['map_enc_cls_scores']
         map_enc_bbox_preds = preds_dicts['map_enc_bbox_preds']
         map_enc_pts_preds = preds_dicts['map_enc_pts_preds']
-        ego_fut_preds = preds_dicts['ego_fut_preds']
+        ego_fut_preds = preds_dicts['ego_fut_preds'] # [1,3,6,2]
 
         num_dec_layers = len(all_cls_scores)
         device = gt_labels_list[0].device
 
         gt_bboxes_list = [torch.cat(
             (gt_bboxes.gravity_center, gt_bboxes.tensor[:, 3:]),
-            dim=1).to(device) for gt_bboxes in gt_bboxes_list]
+            dim=1).to(device) for gt_bboxes in gt_bboxes_list] # list([13.9])
 
         all_gt_bboxes_list = [gt_bboxes_list for _ in range(num_dec_layers)]
-        all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]
-        all_gt_attr_labels_list = [gt_attr_labels for _ in range(num_dec_layers)]
+        all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)] #list(3*[13])
+        all_gt_attr_labels_list = [gt_attr_labels for _ in range(num_dec_layers)] #list(3*[13,34])
         all_gt_bboxes_ignore_list = [
             gt_bboxes_ignore for _ in range(num_dec_layers)
         ]
@@ -1567,20 +1567,20 @@ class VADHead(DETRHead):
             all_gt_attr_labels_list, all_gt_bboxes_ignore_list)
         
 
-        num_dec_layers = len(map_all_cls_scores)
+        num_dec_layers = len(map_all_cls_scores) # [3,1,100,3]
         device = map_gt_labels_list[0].device
 
         map_gt_bboxes_list = [
-            map_gt_bboxes.bbox.to(device) for map_gt_bboxes in map_gt_vecs_list]
+            map_gt_bboxes.bbox.to(device) for map_gt_bboxes in map_gt_vecs_list] # list([9, 4])
         map_gt_pts_list = [
-            map_gt_bboxes.fixed_num_sampled_points.to(device) for map_gt_bboxes in map_gt_vecs_list]
+            map_gt_bboxes.fixed_num_sampled_points.to(device) for map_gt_bboxes in map_gt_vecs_list] #list([9, 20, 2])
         if self.map_gt_shift_pts_pattern == 'v0':
             map_gt_shifts_pts_list = [
                 gt_bboxes.shift_fixed_num_sampled_points.to(device) for gt_bboxes in map_gt_vecs_list]
         elif self.map_gt_shift_pts_pattern == 'v1':
             map_gt_shifts_pts_list = [
                 gt_bboxes.shift_fixed_num_sampled_points_v1.to(device) for gt_bboxes in map_gt_vecs_list]
-        elif self.map_gt_shift_pts_pattern == 'v2':
+        elif self.map_gt_shift_pts_pattern == 'v2': # 9, 19, 20, 2
             map_gt_shifts_pts_list = [
                 gt_bboxes.shift_fixed_num_sampled_points_v2.to(device) for gt_bboxes in map_gt_vecs_list]
         elif self.map_gt_shift_pts_pattern == 'v3':
@@ -1746,13 +1746,13 @@ class VADHead(DETRHead):
     ):
         """select_and_pad_pred_map.
         Args:
-            motion_pos: [B, A, 2]
-            map_query: [B, P, D].
-            map_score: [B, P, 3].
-            map_pos: [B, P, pts, 2].
-            map_thresh: map confidence threshold for filtering low-confidence preds
-            dis_thresh: distance threshold for masking far maps for each agent in cross-attn
-            use_fix_pad: always pad one lane instance for each batch
+            motion_pos: [B, A, 2] [1,1800,2]
+            map_query: [B, P, D]. [1, 100, 256]
+            map_score: [B, P, 3]. [1, 100, 3]
+            map_pos: [B, P, pts, 2]. [1, 100, 20, 2]
+            map_thresh: map confidence threshold for filtering low-confidence preds 0.5
+            dis_thresh: distance threshold for masking far maps for each agent in cross-attn 0.2
+            use_fix_pad: always pad one lane instance for each batch true
         Returns:
             selected_map_query: [B*A, P1(+1), D], P1 is the max inst num after filter and pad.
             selected_map_pos: [B*A, P1(+1), 2]
@@ -1764,17 +1764,17 @@ class VADHead(DETRHead):
 
         # use the most close pts pos in each map inst as the inst's pos
         batch, num_map = map_pos.shape[:2]
-        map_dis = torch.sqrt(map_pos[..., 0]**2 + map_pos[..., 1]**2)
-        min_map_pos_idx = map_dis.argmin(dim=-1).flatten()  # [B*P]
-        min_map_pos = map_pos.flatten(0, 1)  # [B*P, pts, 2]
-        min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
+        map_dis = torch.sqrt(map_pos[..., 0]**2 + map_pos[..., 1]**2) # [1,100,20]
+        min_map_pos_idx = map_dis.argmin(dim=-1).flatten()  # [B*P] [100] 距离最小点的index
+        min_map_pos = map_pos.flatten(0, 1)  # [B*P, pts, 2] 【100,20,2】
+        min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2] 拿到每个vector最小点的xy值
         min_map_pos = min_map_pos.view(batch, num_map, 2)  # [B, P, 2]
 
         # select & pad map vectors for different batch using map_thresh
-        map_score = map_score.sigmoid()
-        map_max_score = map_score.max(dim=-1)[0]
-        map_idx = map_max_score > map_thresh
-        batch_max_pnum = 0
+        map_score = map_score.sigmoid() #[1,100,3]
+        map_max_score = map_score.max(dim=-1)[0] # [1,100] 拿到每个vector最大的概率
+        map_idx = map_max_score > map_thresh # 如果概率值大于0.5
+        batch_max_pnum = 0 # 拿到每个batch中概率大于0.5的 数目
         for i in range(map_score.shape[0]):
             pnum = map_idx[i].sum()
             if pnum > batch_max_pnum:
@@ -1782,11 +1782,11 @@ class VADHead(DETRHead):
 
         selected_map_query, selected_map_pos, selected_padding_mask = [], [], []
         for i in range(map_score.shape[0]):
-            dim = map_query.shape[-1]
-            valid_pnum = map_idx[i].sum()
-            valid_map_query = map_query[i, map_idx[i]]
-            valid_map_pos = min_map_pos[i, map_idx[i]]
-            pad_pnum = batch_max_pnum - valid_pnum
+            dim = map_query.shape[-1] #256
+            valid_pnum = map_idx[i].sum() #有效车道线的数目
+            valid_map_query = map_query[i, map_idx[i]] #通过index拿到有效车道线的query
+            valid_map_pos = min_map_pos[i, map_idx[i]] # 有效的车道线位置
+            pad_pnum = batch_max_pnum - valid_pnum # 最大的数目 - 当前batch的有效数目
             padding_mask = torch.tensor([False], device=map_score.device).repeat(batch_max_pnum)
             if pad_pnum != 0:
                 valid_map_query = torch.cat([valid_map_query, torch.zeros((pad_pnum, dim), device=map_score.device)], dim=0)
@@ -1801,7 +1801,7 @@ class VADHead(DETRHead):
         selected_padding_mask = torch.stack(selected_padding_mask, dim=0)
 
         # generate different pe for map vectors for each agent
-        num_agent = motion_pos.shape[1]
+        num_agent = motion_pos.shape[1] #[1,1800,2]
         selected_map_query = selected_map_query.unsqueeze(1).repeat(1, num_agent, 1, 1)  # [B, A, max_P, D]
         selected_map_pos = selected_map_pos.unsqueeze(1).repeat(1, num_agent, 1, 1)  # [B, A, max_P, 2]
         selected_padding_mask = selected_padding_mask.unsqueeze(1).repeat(1, num_agent, 1)  # [B, A, max_P]

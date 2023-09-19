@@ -86,11 +86,12 @@ class SpatialCrossAttention(BaseModule):
             query (Tensor): Query of Transformer with shape
                 (num_query, bs, embed_dims).
             key (Tensor): The key tensor with shape
-                `(num_key, bs, embed_dims)`.
+                `(num_key, bs, embed_dims)`. key & value are feature map from fpn [6, 240, 1, 256]
             value (Tensor): The value tensor with shape
                 `(num_key, bs, embed_dims)`. (B, N, C, H, W)
             residual (Tensor): The tensor used for addition, with the
                 same shape as `x`. Default None. If None, `x` will be used.
+                identity
             query_pos (Tensor): The positional encoding for `query`.
                 Default: None.
             key_pos (Tensor): The positional encoding for  `key`. Default
@@ -127,19 +128,22 @@ class SpatialCrossAttention(BaseModule):
 
         bs, num_query, _ = query.size()
 
-        D = reference_points_cam.size(3)
+        D = reference_points_cam.size(3) #[6,1,10000,4,2]
         indexes = []
-        for i, mask_per_img in enumerate(bev_mask):
+        # 根据每张图片对应的`bev_mask`结果，获取有效query的index
+        for i, mask_per_img in enumerate(bev_mask): #[6,1,10000,4]
             index_query_per_img = mask_per_img[0].sum(-1).nonzero().squeeze(-1)
             indexes.append(index_query_per_img)
         max_len = max([len(each) for each in indexes])
 
-        # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
+        # each camera only interacts with its corresponding BEV queries. 
+        # This step can  greatly save GPU memory.
+        # 使用maxlen 替代 密集的query
         queries_rebatch = query.new_zeros(
             [bs, self.num_cams, max_len, self.embed_dims])
         reference_points_rebatch = reference_points_cam.new_zeros(
             [bs, self.num_cams, max_len, D, 2])
-        
+        # 将query和reference_points_cam中的有效数据，放到rebatch内
         for j in range(bs):
             for i, reference_points_per_img in enumerate(reference_points_cam):   
                 index_query_per_img = indexes[i]
@@ -152,10 +156,12 @@ class SpatialCrossAttention(BaseModule):
             bs * self.num_cams, l, self.embed_dims)
         value = value.permute(2, 0, 1, 3).reshape(
             bs * self.num_cams, l, self.embed_dims)
-
+        
+        # (1, 6, 3563, 256)
         queries = self.deformable_attention(query=queries_rebatch.view(bs*self.num_cams, max_len, self.embed_dims), key=key, value=value,
                                             reference_points=reference_points_rebatch.view(bs*self.num_cams, max_len, D, 2), spatial_shapes=spatial_shapes,
                                             level_start_index=level_start_index).view(bs, self.num_cams, max_len, self.embed_dims)
+        """最后再将六个环视相机查询到的特征整合到一起，再求一个平均值 """
         for j in range(bs):
             for i, index_query_per_img in enumerate(indexes):
                 slots[j, index_query_per_img] += queries[j, i, :len(index_query_per_img)]
@@ -163,10 +169,10 @@ class SpatialCrossAttention(BaseModule):
         count = bev_mask.sum(-1) > 0
         count = count.permute(1, 2, 0).sum(-1)
         count = torch.clamp(count, min=1.0)
-        slots = slots / count[..., None]
-        slots = self.output_proj(slots)
+        slots = slots / count[..., None]  # 求均值, 不同摄像头的点可能反投回bev下的同一个quey中
+        slots = self.output_proj(slots)  # Linear投影
 
-        return self.dropout(slots) + inp_residual
+        return self.dropout(slots) + inp_residual # 残差
 
 
 @ATTENTION.register_module()
@@ -309,7 +315,7 @@ class MSDeformableAttention3D(BaseModule):
              Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
 
-        if value is None:
+        if value is None:  # value [6,240,256], query [6, 3562, 256](BEV 空间反投回2d空间的query)
             value = query
         if identity is None:
             identity = query
@@ -323,23 +329,23 @@ class MSDeformableAttention3D(BaseModule):
 
         bs, num_query, _ = query.shape
         bs, num_value, _ = value.shape
-        assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
+        assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value #(12,20)
 
-        value = self.value_proj(value)
+        value = self.value_proj(value) # Linear project
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)
-        value = value.view(bs, num_value, self.num_heads, -1)
+        value = value.view(bs, num_value, self.num_heads, -1)  # value 按attention头划分 [6, 240, 8, 32]
         sampling_offsets = self.sampling_offsets(query).view(
-            bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
+            bs, num_query, self.num_heads, self.num_levels, self.num_points, 2) # query 投影绝对偏移量 [6, 3562, 8, 1, 8, 2]
         attention_weights = self.attention_weights(query).view(
-            bs, num_query, self.num_heads, self.num_levels * self.num_points)
+            bs, num_query, self.num_heads, self.num_levels * self.num_points) # query 投影attention weight [6, 3562, 8, 8]
 
-        attention_weights = attention_weights.softmax(-1)
+        attention_weights = attention_weights.softmax(-1) # 每个点的权重
 
         attention_weights = attention_weights.view(bs, num_query,
                                                    self.num_heads,
                                                    self.num_levels,
-                                                   self.num_points)
+                                                   self.num_points) # [6, 3562, 8, 1, 8]
 
         if reference_points.shape[-1] == 2:
             """
@@ -349,21 +355,21 @@ class MSDeformableAttention3D(BaseModule):
             For `num_Z_anchors` reference points,  it has overall `num_points * num_Z_anchors` sampling points.
             """
             offset_normalizer = torch.stack(
-                [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
+                [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1) # [1, 2]
 
-            bs, num_query, num_Z_anchors, xy = reference_points.shape
-            reference_points = reference_points[:, :, None, None, None, :, :]
+            bs, num_query, num_Z_anchors, xy = reference_points.shape #[6,3562,4,2]
+            reference_points = reference_points[:, :, None, None, None, :, :] #[6,3562,1,1,1,4,2]
             sampling_offsets = sampling_offsets / \
-                offset_normalizer[None, None, None, :, None, :]
-            bs, num_query, num_heads, num_levels, num_all_points, xy = sampling_offsets.shape
+                offset_normalizer[None, None, None, :, None, :]  # offset 绝对位置，转成相对于输入feature map的相对位置
+            bs, num_query, num_heads, num_levels, num_all_points, xy = sampling_offsets.shape  # [6, 3562, 8, 1, 8, 2]
             sampling_offsets = sampling_offsets.view(
-                bs, num_query, num_heads, num_levels, num_all_points // num_Z_anchors, num_Z_anchors, xy)
-            sampling_locations = reference_points + sampling_offsets
+                bs, num_query, num_heads, num_levels, num_all_points // num_Z_anchors, num_Z_anchors, xy) # [6, 3562, 8, 1, 2, 4, 2]
+            sampling_locations = reference_points + sampling_offsets # [6, 3562, 8, 1, 2, 4, 2]
             bs, num_query, num_heads, num_levels, num_points, num_Z_anchors, xy = sampling_locations.shape
             assert num_all_points == num_points * num_Z_anchors
 
             sampling_locations = sampling_locations.view(
-                bs, num_query, num_heads, num_levels, num_all_points, xy)
+                bs, num_query, num_heads, num_levels, num_all_points, xy) # [6, 3562, 8, 1, 8, 2]
 
         elif reference_points.shape[-1] == 4:
             assert False
@@ -390,4 +396,4 @@ class MSDeformableAttention3D(BaseModule):
         if not self.batch_first:
             output = output.permute(1, 0, 2)
 
-        return output
+        return output  #[6,3563,256]

@@ -64,7 +64,7 @@ class VAD(MVXTwoStageDetector):
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
         """Extract features of images."""
-        B = img.size(0)
+        B = img.size(0)  #img [2,6,3,384,640]
         if img is not None:
             
             # input_shape = img.shape[-2:]
@@ -76,17 +76,17 @@ class VAD(MVXTwoStageDetector):
                 img.squeeze_()
             elif img.dim() == 5 and img.size(0) > 1:
                 B, N, C, H, W = img.size()
-                img = img.reshape(B * N, C, H, W)
-            if self.use_grid_mask:
+                img = img.reshape(B * N, C, H, W)  # [12, 3, 384,640]
+            if self.use_grid_mask:  # 是否使用mask做数据增强
                 img = self.grid_mask(img)
 
-            img_feats = self.img_backbone(img)
+            img_feats = self.img_backbone(img) # resnet只return layer3的输出 list([12,2048,12,20]) 
             if isinstance(img_feats, dict):
                 img_feats = list(img_feats.values())
         else:
             return None
-        if self.with_img_neck:
-            img_feats = self.img_neck(img_feats)
+        if self.with_img_neck:  # use fpn [2048] -> [256]
+            img_feats = self.img_neck(img_feats)  # list([12,256,12,20])
 
         img_feats_reshaped = []
         for img_feat in img_feats:
@@ -95,11 +95,17 @@ class VAD(MVXTwoStageDetector):
                 img_feats_reshaped.append(img_feat.view(int(B/len_queue), len_queue, int(BN / B), C, H, W))
             else:
                 img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W))
-        return img_feats_reshaped
+        return img_feats_reshaped  # [1,2,6,256,12,20]
 
     @auto_fp16(apply_to=('img'), out_fp32=True)
     def extract_feat(self, img, img_metas=None, len_queue=None):
-        """Extract features from images and points."""
+        """Extract features from images and points.
+           img_feats 是一个多尺度的特征列表
+            [0]: (bs, cam, 256, h / 8, w / 8)
+            [1]: (bs, cam, 256, h / 16, w / 16)
+            [2]: (bs, cam, 256, h / 32, w / 32)
+            [3]: (bs, cam, 256, h / 64, w / 64)
+    """
 
         img_feats = self.extract_img_feat(img, img_metas, len_queue=len_queue)
         
@@ -171,15 +177,15 @@ class VAD(MVXTwoStageDetector):
 
         with torch.no_grad():
             prev_bev = None
-            bs, len_queue, num_cams, C, H, W = imgs_queue.shape
-            imgs_queue = imgs_queue.reshape(bs*len_queue, num_cams, C, H, W)
-            img_feats_list = self.extract_feat(img=imgs_queue, len_queue=len_queue)
+            bs, len_queue, num_cams, C, H, W = imgs_queue.shape  #[1,2,6,3,384,640]
+            imgs_queue = imgs_queue.reshape(bs*len_queue, num_cams, C, H, W) #[2,6,3,384,640]
+            img_feats_list = self.extract_feat(img=imgs_queue, len_queue=len_queue) # resnet+fpn list([1,2,6,256,12,20])
             for i in range(len_queue):
-                img_metas = [each[i] for each in img_metas_list]
+                img_metas = [each[i] for each in img_metas_list]  # 过去某一帧的
                 # img_feats = self.extract_feat(img=img, img_metas=img_metas)
-                img_feats = [each_scale[:, i] for each_scale in img_feats_list]
+                img_feats = [each_scale[:, i] for each_scale in img_feats_list] #过去那一帧的feature map [1,6,256,12,20]
                 prev_bev = self.pts_bbox_head(
-                    img_feats, img_metas, prev_bev, only_bev=True)
+                    img_feats, img_metas, prev_bev, only_bev=True) #[1,10000,256], 拿过去帧的prev bev更新当前帧的特征
             self.train()
             return prev_bev
 
@@ -207,7 +213,7 @@ class VAD(MVXTwoStageDetector):
                       ego_lcf_feat=None,
                       gt_attr_labels=None
                       ):
-        """Forward training function.
+        """Forward training function. 做train的前处理，获取当前帧的feature以及先前帧的prev bev
         Args:
             points (list[torch.Tensor], optional): Points of each sample.
                 Defaults to None.
@@ -231,17 +237,18 @@ class VAD(MVXTwoStageDetector):
             dict: Losses of different branches.
         """
         
-        len_queue = img.size(1)
-        prev_img = img[:, :-1, ...]
-        img = img[:, -1, ...]
+        len_queue = img.size(1)  # [1,3,6,3,384,640]
+        prev_img = img[:, :-1, ...]  # 前两帧的周视图像
+        img = img[:, -1, ...]  # 当前帧的周视图像
 
-        prev_img_metas = copy.deepcopy(img_metas)
+        prev_img_metas = copy.deepcopy(img_metas)  # img_metas[bs],包括3帧的图像的地址 shape lidar2img转换矩阵 canbus等
         # prev_bev = self.obtain_history_bev(prev_img, prev_img_metas)
         # import pdb;pdb.set_trace()
+        # 拿到历史帧的bev信息
         prev_bev = self.obtain_history_bev(prev_img, prev_img_metas) if len_queue > 1 else None
 
-        img_metas = [each[len_queue-1] for each in img_metas]
-        img_feats = self.extract_feat(img=img, img_metas=img_metas)
+        img_metas = [each[len_queue-1] for each in img_metas]  # 拿到当前帧的参数信息
+        img_feats = self.extract_feat(img=img, img_metas=img_metas) #提取多尺度特征 list([1,6,256,12,20])
         losses = dict()
         losses_pts = self.forward_pts_train(img_feats, gt_bboxes_3d, gt_labels_3d,
                                             map_gt_bboxes_3d, map_gt_labels_3d, img_metas,

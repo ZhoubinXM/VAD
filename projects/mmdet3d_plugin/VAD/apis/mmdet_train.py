@@ -169,7 +169,7 @@ def custom_train_detector(model,
         )
         eval_cfg = cfg.get('evaluation', {})
         eval_cfg['by_epoch'] = cfg.runner['type'] != 'IterBasedRunner'
-        eval_cfg['jsonfile_prefix'] = osp.join('val', cfg.work_dir, time.ctime().replace(' ','_').replace(':','_'))
+        eval_cfg['jsonfile_prefix'] = osp.join(cfg.work_dir, 'val', time.ctime().replace(' ','_').replace(':','_'))
         eval_hook = CustomDistEvalHook if distributed else EvalHook
         runner.register_hook(eval_hook(val_dataloader, **eval_cfg))
 

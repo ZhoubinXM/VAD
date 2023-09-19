@@ -4,7 +4,22 @@ import numpy as np
 from PIL import Image
 from mmcv.runner import force_fp32, auto_fp16
 
+"""GridMask是一种数据增强技术，可以用于深度学习训练中，以增加模型的泛化能力。
+它通过在输入图像上添加一些网格形状的遮罩，使模型在训练时无法看到图像的部分区域，
+从而迫使模型学习到更多的上下文信息。
+
+Grid类的主要方法是__call__，它接受一个图像和一个标签，然后在图像上添加一个网格遮罩。
+遮罩的大小、位置和旋转角度都是随机生成的。
+
+GridMask类是一个PyTorch模块，可以直接作为一个层添加到神经网络中。
+它的主要方法是forward，它接受一个输入张量，然后在张量的每个通道上添加一个网格遮罩。
+
+Grid和GridMask类都有一个set_prob方法，可以用来动态调整遮罩的概率。
+这是一个常见的技术，可以在训练初期使用更少的遮罩，然后随着训练的进行逐渐增加遮罩的数量，使模型逐渐适应更复杂的输入。
+"""
+
 class Grid(object):
+
     def __init__(self, use_h, use_w, rotate = 1, offset=False, ratio = 0.5, mode=0, prob = 1.):
         self.use_h = use_h
         self.use_w = use_w
@@ -80,9 +95,22 @@ class GridMask(nn.Module):
         self.prob = prob
         self.fp16_enable = False
     def set_prob(self, epoch, max_epoch):
-        self.prob = self.st_prob * epoch / max_epoch #+ 1.#0.5
+        self.prob = self.st_prob * epoch / max_epoch # prob随着训练的进行而增大
     @auto_fp16()
-    def forward(self, x):
+    def forward(self, x):  # x:[14,3,374,640]
+        """
+            计算遮挡的高度和宽度，以及遮挡的大小d。
+            创建一个全为1的遮挡矩阵mask。
+            计算遮挡的起始位置st_h和st_w。
+            如果设置了使用高度遮挡，则在遮挡矩阵mask上，将每个高度区间的一部分设置为0，表示遮挡。
+            如果设置了使用宽度遮挡，则在遮挡矩阵mask上，将每个宽度区间的一部分设置为0，表示遮挡。
+            随机旋转遮挡矩阵。
+            将遮挡矩阵裁剪到与输入图像相同的大小，并转为torch张量，放到GPU上。
+            如果设置了模式1，则遮挡矩阵取反。
+            将遮挡矩阵扩展为与输入相同的尺寸。
+            如果设置了偏移，则输入图像在遮挡部分加上随机偏移，否则输入图像直接乘以遮挡矩阵，实现遮挡效果。
+            最后返回遮挡后的图像。
+        """
         if np.random.rand() > self.prob or not self.training:
             return x
         n,c,h,w = x.size()

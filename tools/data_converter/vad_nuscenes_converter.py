@@ -230,8 +230,8 @@ def _fill_trainval_infos(nusc,
         lidar_token = sample['data']['LIDAR_TOP']
         sd_rec = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
         cs_record = nusc.get('calibrated_sensor',
-                             sd_rec['calibrated_sensor_token'])  # 相对于自车的位移与旋转
-        pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])  # 相对于世界坐标系
+                             sd_rec['calibrated_sensor_token'])  # lidar 外参 自车坐标系下的位移与旋转
+        pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])  # 世界坐标系下
         if sample['prev'] != '':
             sample_prev = nusc.get('sample', sample['prev'])
             sd_rec_prev = nusc.get('sample_data', sample_prev['data']['LIDAR_TOP'])
@@ -269,9 +269,9 @@ def _fill_trainval_infos(nusc,
             'sweeps': [],
             'cams': dict(),
             'scene_token': sample['scene_token'],  # temporal related info
-            'lidar2ego_translation': cs_record['translation'],
+            'lidar2ego_translation': cs_record['translation'],  # ego系下lidar的translation matrix
             'lidar2ego_rotation': cs_record['rotation'],
-            'ego2global_translation': pose_record['translation'],
+            'ego2global_translation': pose_record['translation'],  # global系下，ego的
             'ego2global_rotation': pose_record['rotation'],
             'timestamp': sample['timestamp'],
             'fut_valid_flag': fut_valid_flag,

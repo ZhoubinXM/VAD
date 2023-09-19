@@ -132,3 +132,5 @@ outputs
 file.txt
 ckpts
 .vscode
+tools/dist_train.sh
+test

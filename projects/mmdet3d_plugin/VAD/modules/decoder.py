@@ -81,23 +81,23 @@ class DetectionTransformerDecoder(TransformerLayerSequence):
                 return_intermediate is `False`, otherwise it has shape
                 [num_layers, num_query, bs, embed_dims].
         """
-        output = query
+        output = query  #[300,1,256]
         intermediate = []
         intermediate_reference_points = []
         for lid, layer in enumerate(self.layers):
 
             reference_points_input = reference_points[..., :2].unsqueeze(
-                2)  # BS NUM_QUERY NUM_LEVEL 2
+                2)  # BS NUM_QUERY NUM_LEVEL 2 [1,300,2]
             output = layer(
                 output,
                 *args,
                 reference_points=reference_points_input,
                 key_padding_mask=key_padding_mask,
                 **kwargs)
-            output = output.permute(1, 0, 2)
+            output = output.permute(1, 0, 2)  # [1, 300, 256] 显示的构建query
 
             if reg_branches is not None:
-                tmp = reg_branches[lid](output)
+                tmp = reg_branches[lid](output) #[1,300,10]
 
                 assert reference_points.shape[-1] == 3
 
@@ -113,8 +113,8 @@ class DetectionTransformerDecoder(TransformerLayerSequence):
 
             output = output.permute(1, 0, 2)
             if self.return_intermediate:
-                intermediate.append(output)
-                intermediate_reference_points.append(reference_points)
+                intermediate.append(output) # [300,1,256]
+                intermediate_reference_points.append(reference_points) #[1,300,256]
 
         if self.return_intermediate:
             return torch.stack(intermediate), torch.stack(
@@ -165,7 +165,7 @@ class CustomMSDeformableAttention(BaseModule):
         if embed_dims % num_heads != 0:
             raise ValueError(f'embed_dims must be divisible by num_heads, '
                              f'but got {embed_dims} and {num_heads}')
-        dim_per_head = embed_dims // num_heads
+        dim_per_head = embed_dims // num_heads  # 256 // 8 = 32
         self.norm_cfg = norm_cfg
         self.dropout = nn.Dropout(dropout)
         self.batch_first = batch_first
@@ -189,9 +189,9 @@ class CustomMSDeformableAttention(BaseModule):
 
         self.im2col_step = im2col_step
         self.embed_dims = embed_dims
-        self.num_levels = num_levels
+        self.num_levels = num_levels  # 1
         self.num_heads = num_heads
-        self.num_points = num_points
+        self.num_points = num_points  # 4
         self.sampling_offsets = nn.Linear(
             embed_dims, num_heads * num_levels * num_points * 2)
         self.attention_weights = nn.Linear(embed_dims,
@@ -271,12 +271,12 @@ class CustomMSDeformableAttention(BaseModule):
         """
 
         if value is None:
-            value = query
+            value = query  # [10000, 1, 256]
 
         if identity is None:
-            identity = query
+            identity = query  # [300, 1, 256]
         if query_pos is not None:
-            query = query + query_pos
+            query = query + query_pos # [300, 1, 256]
         if not self.batch_first:
             # change to (bs, num_query ,embed_dims)
             query = query.permute(1, 0, 2)
@@ -286,11 +286,11 @@ class CustomMSDeformableAttention(BaseModule):
         bs, num_value, _ = value.shape
         assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
 
-        value = self.value_proj(value)
+        value = self.value_proj(value)  # bev feature project [1, 10000,256]
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)
-        value = value.view(bs, num_value, self.num_heads, -1)
-
+        value = value.view(bs, num_value, self.num_heads, -1) # [1,10000,8,32]
+        # 每个det点的相对位移 [1,300,8,1,4,2]
         sampling_offsets = self.sampling_offsets(query).view(
             bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
         attention_weights = self.attention_weights(query).view(
@@ -301,7 +301,7 @@ class CustomMSDeformableAttention(BaseModule):
                                                    self.num_heads,
                                                    self.num_levels,
                                                    self.num_points)
-        if reference_points.shape[-1] == 2:
+        if reference_points.shape[-1] == 2:  #[1,300,1,2]
             offset_normalizer = torch.stack(
                 [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
             sampling_locations = reference_points[:, :, None, :, None, :] \
@@ -330,10 +330,10 @@ class CustomMSDeformableAttention(BaseModule):
             output = multi_scale_deformable_attn_pytorch(
                 value, spatial_shapes, sampling_locations, attention_weights)
 
-        output = self.output_proj(output)
+        output = self.output_proj(output)  #[1,300,256]
 
         if not self.batch_first:
             # (num_query, bs ,embed_dims)
             output = output.permute(1, 0, 2)
 
-        return self.dropout(output) + identity
+        return self.dropout(output) + identity # 残差 [300,1,256]

@@ -3,7 +3,7 @@
 # ---------------------------------------------
 #  Modified by Zhiqi Li
 # ---------------------------------------------
- 
+
 from __future__ import division
 
 import argparse
@@ -12,6 +12,7 @@ import mmcv
 import os
 import time
 import torch
+import shutil
 import warnings
 from mmcv import Config, DictAction
 from mmcv.runner import get_dist_info, init_dist
@@ -30,34 +31,40 @@ from mmseg import __version__ as mmseg_version
 from mmcv.utils import TORCH_VERSION, digit_version
 
 import cv2
+
 cv2.setNumThreads(1)
 
 import sys
+
 sys.path.append('')
+
+def get_color_text(text: str, color='red'):
+  if color == 'red':
+    return "\033[31m" + text + "\033[0m"
+  else:
+    assert False
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a detector')
     parser.add_argument('config', help='train config file path')
     parser.add_argument('--work-dir', help='the dir to save logs and models')
-    parser.add_argument(
-        '--resume-from', help='the checkpoint file to resume from')
+    parser.add_argument('--resume-from',
+                        help='the checkpoint file to resume from')
     parser.add_argument(
         '--no-validate',
         action='store_true',
         help='whether not to evaluate the checkpoint during training')
     group_gpus = parser.add_mutually_exclusive_group()
-    group_gpus.add_argument(
-        '--gpus',
-        type=int,
-        help='number of gpus to use '
-        '(only applicable to non-distributed training)')
-    group_gpus.add_argument(
-        '--gpu-ids',
-        type=int,
-        nargs='+',
-        help='ids of gpus to use '
-        '(only applicable to non-distributed training)')
+    group_gpus.add_argument('--gpus',
+                            type=int,
+                            help='number of gpus to use '
+                            '(only applicable to non-distributed training)')
+    group_gpus.add_argument('--gpu-ids',
+                            type=int,
+                            nargs='+',
+                            help='ids of gpus to use '
+                            '(only applicable to non-distributed training)')
     parser.add_argument('--seed', type=int, default=0, help='random seed')
     parser.add_argument(
         '--deterministic',
@@ -80,16 +87,14 @@ def parse_args():
         'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
         'Note that the quotation marks are necessary and that no white space '
         'is allowed.')
-    parser.add_argument(
-        '--launcher',
-        choices=['none', 'pytorch', 'slurm', 'mpi'],
-        default='none',
-        help='job launcher')
+    parser.add_argument('--launcher',
+                        choices=['none', 'pytorch', 'slurm', 'mpi'],
+                        default='none',
+                        help='job launcher')
     parser.add_argument('--local_rank', type=int, default=0)
-    parser.add_argument(
-        '--autoscale-lr',
-        action='store_true',
-        help='automatically scale lr with the number of gpus')
+    parser.add_argument('--autoscale-lr',
+                        action='store_true',
+                        help='automatically scale lr with the number of gpus')
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
@@ -161,8 +166,9 @@ def main():
         cfg.gpu_ids = args.gpu_ids
     else:
         cfg.gpu_ids = range(1) if args.gpus is None else range(args.gpus)
-    if digit_version(TORCH_VERSION) == digit_version('1.8.1') and cfg.optimizer['type'] == 'AdamW':
-        cfg.optimizer['type'] = 'AdamW2' # fix bug in Adamw
+    if digit_version(TORCH_VERSION) == digit_version(
+            '1.8.1') and cfg.optimizer['type'] == 'AdamW':
+        cfg.optimizer['type'] = 'AdamW2'  # fix bug in Adamw
     if args.autoscale_lr:
         # apply the linear scaling rule (https://arxiv.org/abs/1706.02677)
         cfg.optimizer['lr'] = cfg.optimizer['lr'] * len(cfg.gpu_ids) / 8
@@ -176,7 +182,11 @@ def main():
         # re-set gpu_ids with distributed training mode
         _, world_size = get_dist_info()
         cfg.gpu_ids = range(world_size)
-
+    # only keep one 
+    if os.path.exists(cfg.work_dir) and distributed == False:
+        print(get_color_text('Warning: ') + f"Path: {cfg.work_dir} is exist!")
+        input()
+        shutil.rmtree(cfg.work_dir)
     # create work_dir
     mmcv.mkdir_or_exist(osp.abspath(cfg.work_dir))
     # dump config
@@ -191,8 +201,9 @@ def main():
         logger_name = 'mmseg'
     else:
         logger_name = 'mmdet'
-    logger = get_root_logger(
-        log_file=log_file, log_level=cfg.log_level, name=logger_name)
+    logger = get_root_logger(log_file=log_file,
+                             log_level=cfg.log_level,
+                             name=logger_name)
 
     # init the meta dict to record some important information such as
     # environment info and seed, which will be logged
@@ -219,13 +230,16 @@ def main():
     meta['seed'] = args.seed
     meta['exp_name'] = osp.basename(args.config)
 
-    model = build_model(
-        cfg.model,
-        train_cfg=cfg.get('train_cfg'),
-        test_cfg=cfg.get('test_cfg'))
+    model = build_model(cfg.model,
+                        train_cfg=cfg.get('train_cfg'),
+                        test_cfg=cfg.get('test_cfg'))
     model.init_weights()
 
     logger.info(f'Model:\n{model}')
+    all = 0
+    for _, param in model.named_parameters():
+        all += param.nelement()
+    logger.info("Model Params: %.2fM" %(all*10**-6))
     datasets = [build_dataset(cfg.data.train)]
     if len(cfg.workflow) == 2:
         val_dataset = copy.deepcopy(cfg.data.val)
@@ -252,14 +266,13 @@ def main():
             if hasattr(datasets[0], 'PALETTE') else None)
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
-    custom_train_model(
-        model,
-        datasets,
-        cfg,
-        distributed=distributed,
-        validate=(not args.no_validate),
-        timestamp=timestamp,
-        meta=meta)
+    custom_train_model(model,
+                       datasets,
+                       cfg,
+                       distributed=distributed,
+                       validate=(not args.no_validate),
+                       timestamp=timestamp,
+                       meta=meta)
 
 
 if __name__ == '__main__':

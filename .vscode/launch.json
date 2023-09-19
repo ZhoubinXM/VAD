@@ -1,12 +1,52 @@
 {
   "configurations": [
     {
-      "name": "Python: Current File",
+      "name": "TRAIN",
       "type": "python",
       "request": "launch",
-      "program": "${file}",
+      "program": "${workspaceFolder}/tools/train.py",
       "console": "integratedTerminal",
-      "justMyCode": true
+      "justMyCode": false,
+      "args":[
+        "projects/configs/VAD/VAD_tiny_stage_1.py",
+        "--work-dir",
+        "outputs/debug_tiny_stage_1",
+        "--gpu-ids",
+        "0",
+        "--cfg-options",
+        "data.train.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_train.pkl'",
+        "data.val.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_val.pkl'",
+        "data.test.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_val.pkl'"
+
+      ]
+    },
+    {
+      "name": "EVAL",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/tools/test.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "args":[
+        "projects/configs/VAD/VAD_tiny_stage_1.py",
+        // "outputs/debug_tiny_stage_1/epoch_1.pth",
+        "ckpts/VAD_tiny.pth",
+        "--out",
+        "outputs/debug_tiny_stage_1/res.pkl",
+        "--gpu-collect",
+        "--launcher", 
+        "none",  // for single test
+        // "pytorch", 
+        "--eval", 
+        "bbox", 
+        "--tmpdir", 
+        "tmp",
+        // "--cfg-options",
+        // "data.train.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_train.pkl'",
+        // "data.val.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_val.pkl'",
+        // "data.test.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_val.pkl'"
+
+      ]
     },
     {
       "name": "create data",
@@ -22,7 +62,7 @@
         "--out-dir",
         "./data/nuscenes/trainval/infos",
         "--extra-tag",
-        "vad_nuscenes",
+        "vad_nuscenes_mini",
         "--version",
         "v1.0-mini",
         "--canbus",

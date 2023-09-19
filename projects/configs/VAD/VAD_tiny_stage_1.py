@@ -12,7 +12,9 @@ point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
 voxel_size = [0.15, 0.15, 4]
 
 img_norm_cfg = dict(
-    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
+   mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0], to_rgb=False)
+# img_norm_cfg = dict(
+#     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 # For nuScenes we usually do 10-class detection
 class_names = [
     'car', 'truck', 'construction_vehicle', 'bus', 'trailer', 'barrier',
@@ -53,7 +55,7 @@ model = dict(
         type='ResNet',
         depth=50,
         num_stages=4,
-        out_indices=(3,),
+        out_indices=(3,),  # 只return layer3的输出
         frozen_stages=1,
         norm_cfg=dict(type='BN', requires_grad=False),
         norm_eval=True,
@@ -61,10 +63,10 @@ model = dict(
     img_neck=dict(
         type='FPN',
         in_channels=[2048],
-        out_channels=_dim_,
+        out_channels=_dim_,  # 256
         start_level=0,
         add_extra_convs='on_output',
-        num_outs=_num_levels_,
+        num_outs=_num_levels_,  # 1
         relu_before_extra_convs=True),
     pts_bbox_head=dict(
         type='VADHead',
@@ -169,6 +171,7 @@ model = dict(
             use_shift=True,
             use_can_bus=True,
             embed_dims=_dim_,
+            num_feature_levels=4,  # this used numed feature map
             encoder=dict(
                 type='BEVFormerEncoder',
                 num_layers=3,
@@ -193,7 +196,7 @@ model = dict(
                             embed_dims=_dim_,
                         )
                     ],
-                    feedforward_channels=_ffn_dim_,
+                    feedforward_channels=_ffn_dim_, # 256*2
                     ffn_dropout=0.1,
                     operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
                                      'ffn', 'norm'))),
@@ -422,7 +425,7 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3)
 
-evaluation = dict(interval=total_epochs, pipeline=test_pipeline, metric='bbox', map_metric='chamfer')
+evaluation = dict(interval=1, pipeline=test_pipeline, metric='bbox', map_metric='chamfer')
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 

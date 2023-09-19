@@ -168,7 +168,7 @@ class TemporalSelfAttention(BaseModule):
              Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
 
-        if value is None:
+        if value is None:  # no prev bev, 用query构造value 相当于自注意力机制
             assert self.batch_first
             bs, len_bev, c = query.shape
             value = torch.stack([query, query], 1).reshape(bs*2, len_bev, c)
@@ -176,45 +176,55 @@ class TemporalSelfAttention(BaseModule):
             # value = torch.cat([query, query], 0)
 
         if identity is None:
-            identity = query
+            identity = query  # 使用query作为identity
         if query_pos is not None:
-            query = query + query_pos
+            query = query + query_pos  # bev query + bev_pos
         if not self.batch_first:
             # change to (bs, num_query ,embed_dims)
             query = query.permute(1, 0, 2)
             value = value.permute(1, 0, 2)
-        bs,  num_query, embed_dims = query.shape
-        _, num_value, _ = value.shape
+        bs,  num_query, embed_dims = query.shape  #[1, 10000, 256]
+        _, num_value, _ = value.shape  #[2, 10000, 256]
         assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
         assert self.num_bev_queue == 2
-
-        query = torch.cat([value[:bs], query], -1)
-        value = self.value_proj(value)
+        """ bev_query 按照通道维度进行 concat """
+        # [1,10000,512]
+        query = torch.cat([value[:bs], query], -1)  # query 将之前的bev与当前bev query cat
+        """ value 经过 Linear 做映射 """
+        value = self.value_proj(value) # 线性层映射 [2,10000,256]
 
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], 0.0)
 
         value = value.reshape(bs*self.num_bev_queue,
-                              num_value, self.num_heads, -1)
-
+                              num_value, self.num_heads, -1)  # 按照atten头平分256[8,32]
+        """ offsets 以及 attention weights 的生成过程 """
+        # sampling_offsets: shape = (bs, num_query, 8, 2, 1, 4, 2)
+        # 对 query 进行维度映射得到采样点的偏移量
         sampling_offsets = self.sampling_offsets(query)
         sampling_offsets = sampling_offsets.view(
             bs, num_query, self.num_heads,  self.num_bev_queue, self.num_levels, self.num_points, 2)
+        # 对 query 进行维度映射得到注意力权重 (bs, num_query, 8, 2, 4)
         attention_weights = self.attention_weights(query).view(
             bs, num_query,  self.num_heads, self.num_bev_queue, self.num_levels * self.num_points)
         attention_weights = attention_weights.softmax(-1)
-
+        #(bs, num_query, 8, 2, 1, 4)
         attention_weights = attention_weights.view(bs, num_query,
                                                    self.num_heads,
                                                    self.num_bev_queue,
                                                    self.num_levels,
                                                    self.num_points)
-
+        # weight: (2,10000,8,1,4)
         attention_weights = attention_weights.permute(0, 3, 1, 2, 4, 5)\
             .reshape(bs*self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points).contiguous()
+        # sample: (2,10000,8,1,4,2)
         sampling_offsets = sampling_offsets.permute(0, 3, 1, 2, 4, 5, 6)\
             .reshape(bs*self.num_bev_queue, num_query, self.num_heads, self.num_levels, self.num_points, 2)
-
+        # reference_points: [2,10000,1,2] 归一化后的相对位置
+        """ sample location 的生成过程 
+        1. 通过 query 学到的 sampling_offsets 偏移量是一个绝对量，不是相对量，所以需要做 normalize；
+        2. 最终生成的 sampling_locations 是一个相对量；
+        """
         if reference_points.shape[-1] == 2:
             offset_normalizer = torch.stack(
                 [spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
@@ -231,6 +241,19 @@ class TemporalSelfAttention(BaseModule):
             raise ValueError(
                 f'Last dim of reference_points must be'
                 f' 2 or 4, but get {reference_points.shape[-1]} instead.')
+        """ 各个参数的 shape 情况 
+        1. value: (2，10000，8，32） # 2: 代表前一时刻的 BEV 特征和后一时刻的 BEV 特征，
+                                        两个特征在计算的过程中是互不干扰的，
+                                    # 10000: 代表 bev_query 100 * 100 空间大小的每个位置
+                                    # 8: 代表8个头，
+                                    # 32: 每个头表示为 32 维的特征
+        2. spatial_shapes: (100, 100) # 方便将归一化的 sampling_locations 反归一化
+        3. level_start_index: 0 # BEV 特征只有一层
+        4. sampling_locations: (2, 10000, 8, 1, 4, 2)
+        5. attention_weights: (2, 10000, 8, 1, 4)
+
+        6. output: (2, 40000, 8, 32)
+        """
         if torch.cuda.is_available() and value.is_cuda:
 
             # using fp16 deformable attention is unstable because it performs many sum operations
@@ -250,17 +273,17 @@ class TemporalSelfAttention(BaseModule):
         # (bs*num_bev_queue, num_query, embed_dims)-> (num_query, embed_dims, bs*num_bev_queue)
         output = output.permute(1, 2, 0)
 
-        # fuse history value and current value
+        # fuse history value and current value, 做平均
         # (num_query, embed_dims, bs*num_bev_queue)-> (num_query, embed_dims, bs, num_bev_queue)
         output = output.view(num_query, embed_dims, bs, self.num_bev_queue)
         output = output.mean(-1)
 
         # (num_query, embed_dims, bs)-> (bs, num_query, embed_dims)
         output = output.permute(2, 0, 1)
-
+        # Linear做一下投影
         output = self.output_proj(output)
 
         if not self.batch_first:
             output = output.permute(1, 0, 2)
 
-        return self.dropout(output) + identity
+        return self.dropout(output) + identity  # 残差连接

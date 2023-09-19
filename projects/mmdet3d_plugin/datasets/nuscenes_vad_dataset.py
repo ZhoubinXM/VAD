@@ -1082,7 +1082,7 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         lidar2global = ego2global @ lidar2ego
 
         lidar2global_translation = list(lidar2global[:3,3])
-        lidar2global_rotation = list(Quaternion(matrix=lidar2global).q)
+        lidar2global_rotation = list(Quaternion(matrix=lidar2global).q)  # 将雷达坐标系的点转到global
 
         location = input_dict['map_location']
         ego2global_translation = input_dict['ego2global_translation']
@@ -1768,11 +1768,11 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         all_metric_dict = {}
         for met in motion_metric_names:
             for cls in motion_cls_names:
-                all_metric_dict[met+'_'+cls] = 0.0
+                all_metric_dict[met+'_'+cls] = 10e-6
         result_dict = {}
         for met in result_metric_names:
             for cls in motion_cls_names:
-                result_dict[met+'_'+cls] = 0.0
+                result_dict[met+'_'+cls] = 10e-6
         
         alpha = 0.5
 
