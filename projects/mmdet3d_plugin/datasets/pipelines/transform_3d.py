@@ -110,6 +110,8 @@ class PadMultiViewImage(object):
         size (tuple, optional): Fixed padding size.
         size_divisor (int, optional): The divisor of padded size.
         pad_val (float, optional): Padding value, 0 by default.
+    填充到
+    可被某个数字整除的最小大小。
     """
 
     def __init__(self, size=None, size_divisor=None, pad_val=0):

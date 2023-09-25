@@ -23,7 +23,7 @@ class CustomNMSFreeCoder(BaseBBoxCoder):
                  pc_range,
                  voxel_size=None,
                  post_center_range=None,
-                 max_num=100,
+                 max_num=10,
                  score_threshold=None,
                  num_classes=10):
         self.pc_range = pc_range
@@ -36,6 +36,9 @@ class CustomNMSFreeCoder(BaseBBoxCoder):
     def encode(self):
 
         pass
+
+    def set_max_num(self, num):
+        self.max_num = num
 
     def decode_single(self, cls_scores, bbox_preds, traj_preds):
         """Decode bboxes.
@@ -56,7 +59,8 @@ class CustomNMSFreeCoder(BaseBBoxCoder):
         labels = indexs % self.num_classes
         bbox_index = indexs // self.num_classes
         bbox_preds = bbox_preds[bbox_index]
-        traj_preds = traj_preds[bbox_index]
+        # no need index
+        traj_preds = traj_preds
        
         final_box_preds = denormalize_bbox(bbox_preds, self.pc_range)   
         final_scores = scores 
@@ -88,7 +92,8 @@ class CustomNMSFreeCoder(BaseBBoxCoder):
             boxes3d = final_box_preds[mask]
             scores = final_scores[mask]
             labels = final_preds[mask]
-            trajs = final_traj_preds[mask]
+            # no need mask
+            trajs = final_traj_preds
 
             predictions_dict = {
                 'bboxes': boxes3d,

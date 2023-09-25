@@ -736,7 +736,7 @@ if __name__ == '__main__':
     bevformer_results = mmcv.load(inference_result_path)
     sample_token_list = list(bevformer_results['results'].keys())
 
-    nusc = NuScenes(version='v1.0-trainval', dataroot='./data/nuscenes', verbose=True)
+    nusc = NuScenes(version='v1.0-mini', dataroot='./data/nuscenes/trainval', verbose=True)
     
     imgs = []
     fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
@@ -749,7 +749,7 @@ if __name__ == '__main__':
                            out_path=out_path)
         pred_path = osp.join(out_path, 'bev_pred.png')
         pred_img = cv2.imread(pred_path)
-        os.remove(pred_path)
+        # os.remove(pred_path)
 
         sample_token = sample_token_list[id]
         sample = nusc.get('sample', sample_token)

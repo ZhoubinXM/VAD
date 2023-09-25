@@ -1000,14 +1000,14 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         **kwargs
     ):
         super().__init__(*args, **kwargs)
-        self.queue_length = queue_length
-        self.overlap_test = overlap_test
-        self.bev_size = bev_size
-        self.with_attr = with_attr
-        self.fut_ts = fut_ts
+        self.queue_length = queue_length  # 使用多久的历史图片 3帧
+        self.overlap_test = overlap_test # false
+        self.bev_size = bev_size # （100,100）
+        self.with_attr = with_attr # true
+        self.fut_ts = fut_ts # 6
         self.use_pkl_result = use_pkl_result
 
-        self.custom_eval_version = custom_eval_version
+        self.custom_eval_version = custom_eval_version # vad_nusc_detection_cvpr_2019
         # Check if config exists.
         this_dir = os.path.dirname(os.path.abspath(__file__))
         cfg_path = os.path.join(this_dir, '%s.json' % self.custom_eval_version)
@@ -1015,19 +1015,19 @@ class VADCustomNuScenesDataset(NuScenesDataset):
             'Requested unknown configuration {}'.format(self.custom_eval_version)
         # Load config file and deserialize it.
         with open(cfg_path, 'r') as f:
-            data = json.load(f)
-        self.custom_eval_detection_configs = v1CustomDetectionConfig.deserialize(data)
+            data = json.load(f)  # detection的范围等
+        self.custom_eval_detection_configs = v1CustomDetectionConfig.deserialize(data) #赋值到config中
 
-        self.map_ann_file = map_ann_file
-        self.MAPCLASSES = self.get_map_classes(map_classes)
+        self.map_ann_file = map_ann_file # train is none
+        self.MAPCLASSES = self.get_map_classes(map_classes) # 'divider''ped_crossing''boundary'
         self.NUM_MAPCLASSES = len(self.MAPCLASSES)
-        self.pc_range = pc_range
-        patch_h = pc_range[4]-pc_range[1]
-        patch_w = pc_range[3]-pc_range[0]
+        self.pc_range = pc_range  # -15.0, -30.0, -2.0, 15.0, 30.0, 2.0
+        patch_h = pc_range[4]-pc_range[1] # 60
+        patch_w = pc_range[3]-pc_range[0] # 30
         self.patch_size = (patch_h, patch_w)
-        self.padding_value = padding_value
-        self.fixed_num = map_fixed_ptsnum_per_line
-        self.eval_use_same_gt_sample_num_flag = map_eval_use_same_gt_sample_num_flag
+        self.padding_value = padding_value # -10000
+        self.fixed_num = map_fixed_ptsnum_per_line # 20
+        self.eval_use_same_gt_sample_num_flag = map_eval_use_same_gt_sample_num_flag # true
         self.vector_map = VectorizedLocalMap(kwargs['data_root'], 
                             patch_size=self.patch_size, map_classes=self.MAPCLASSES, 
                             fixed_ptsnum_per_line=map_fixed_ptsnum_per_line,
@@ -1125,18 +1125,18 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         data_queue = []
 
         # temporal aug
-        prev_indexs_list = list(range(index-self.queue_length, index))
+        prev_indexs_list = list(range(index-self.queue_length, index))  # 获得前几帧feature的index
         random.shuffle(prev_indexs_list)
         prev_indexs_list = sorted(prev_indexs_list[1:], reverse=True)
         ##
 
-        input_dict = self.get_data_info(index)
+        input_dict = self.get_data_info(index) # 获取图像，删除没有雷达感知点的障碍物，坐标系的转换
         if input_dict is None:
             return None
         frame_idx = input_dict['frame_idx']
         scene_token = input_dict['scene_token']
-        self.pre_pipeline(input_dict)
-        example = self.pipeline(input_dict)
+        self.pre_pipeline(input_dict) # 为字典添加空字段
+        example = self.pipeline(input_dict) # 图像增强
         example = self.vectormap_pipeline(example,input_dict)
         if self.filter_empty_gt and \
                 ((example is None or ~(example['gt_labels_3d']._data != -1).any()) or \
@@ -1224,13 +1224,13 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         info = self.data_infos[index]
         # filter out bbox containing no points
         if self.use_valid_flag:
-            mask = info['valid_flag']
+            mask = info['valid_flag']  # 只使用能检测到的障碍物
         else:
             mask = info['num_lidar_pts'] > 0
-        gt_bboxes_3d = info['gt_boxes'][mask]
+        gt_bboxes_3d = info['gt_boxes'][mask] # [A,7]
         gt_names_3d = info['gt_names'][mask]
         gt_labels_3d = []
-        for cat in gt_names_3d:
+        for cat in gt_names_3d:  # 将name与类别id对应，对应不上的赋值-1
             if cat in self.CLASSES:
                 gt_labels_3d.append(self.CLASSES.index(cat))
             else:
@@ -1239,19 +1239,21 @@ class VADCustomNuScenesDataset(NuScenesDataset):
 
         if self.with_velocity:
             gt_velocity = info['gt_velocity'][mask]
-            nan_mask = np.isnan(gt_velocity[:, 0])
+            nan_mask = np.isnan(gt_velocity[:, 0]) # nan赋值为0，0
             gt_velocity[nan_mask] = [0.0, 0.0]
-            gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocity], axis=-1)
-        
+            gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocity], axis=-1) # bbox添加速度[A,9]
+        # TODO: 添加agent的历史轨迹
         if self.with_attr:
-            gt_fut_trajs = info['gt_agent_fut_trajs'][mask]
-            gt_fut_masks = info['gt_agent_fut_masks'][mask]
-            gt_fut_goal = info['gt_agent_fut_goal'][mask]
-            gt_lcf_feat = info['gt_agent_lcf_feat'][mask]
-            gt_fut_yaw = info['gt_agent_fut_yaw'][mask]
+            gt_fut_trajs = info['gt_agent_fut_trajs'][mask] #[A,12]
+            gt_fut_masks = info['gt_agent_fut_masks'][mask] #[A,6]
+            gt_past_trajs = info['gt_agent_past_trajs'][mask] #[A,10]
+            gt_past_masks = info['gt_agent_past_masks'][mask] # [A,5]
+            gt_fut_goal = info['gt_agent_fut_goal'][mask] # [A,]
+            gt_lcf_feat = info['gt_agent_lcf_feat'][mask] #[A,9]
+            gt_fut_yaw = info['gt_agent_fut_yaw'][mask] #[A,6]
             attr_labels = np.concatenate(
-                [gt_fut_trajs, gt_fut_masks, gt_fut_goal[..., None], gt_lcf_feat, gt_fut_yaw], axis=-1
-            ).astype(np.float32)
+                [gt_fut_trajs, gt_fut_masks, gt_past_trajs, gt_past_masks, gt_fut_goal[..., None], gt_lcf_feat, gt_fut_yaw], axis=-1
+            ).astype(np.float32) # [A,34]
 
         # the nuscenes box center is [0.5, 0.5, 0.5], we change it to be
         # the same as KITTI (0.5, 0.5, 0)
@@ -1315,10 +1317,10 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         lidar2ego = np.eye(4).astype(np.float32)
         lidar2ego[:3, :3] = Quaternion(info["lidar2ego_rotation"]).rotation_matrix
         lidar2ego[:3, 3] = info["lidar2ego_translation"]
-        input_dict["lidar2ego"] = lidar2ego
+        input_dict["lidar2ego"] = lidar2ego  # 转换矩阵
 
         if self.modality['use_camera']:
-            image_paths = []
+            image_paths = []  # F, FR, FL, B, BL, BR
             lidar2img_rts = []
             lidar2cam_rts = []
             cam_intrinsics = []
@@ -1367,7 +1369,7 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         #     annos = self.get_ann_info(index)
         #     input_dict['ann_info'] = annos
 
-        annos = self.get_ann_info(index)
+        annos = self.get_ann_info(index) # 删除掉没有雷达感知点的目标
         input_dict['ann_info'] = annos
 
         rotation = Quaternion(input_dict['ego2global_rotation'])
@@ -1378,7 +1380,7 @@ class VADCustomNuScenesDataset(NuScenesDataset):
         patch_angle = quaternion_yaw(rotation) / np.pi * 180
         if patch_angle < 0:
             patch_angle += 360
-        can_bus[-2] = patch_angle / 180 * np.pi
+        can_bus[-2] = patch_angle / 180 * np.pi # 世界坐标系下的弧度与角度
         can_bus[-1] = patch_angle
 
         lidar2ego = np.eye(4)
@@ -1583,9 +1585,9 @@ class VADCustomNuScenesDataset(NuScenesDataset):
             # assert isinstance(results, list)
             results = results['bbox_results']
         assert isinstance(results, list)
-        assert len(results) == len(self), (
-            'The length of results is not equal to the dataset len: {} != {}'.
-            format(len(results), len(self)))
+        # assert len(results) == len(self), (
+        #     'The length of results is not equal to the dataset len: {} != {}'.
+        #     format(len(results), len(self)))
 
         if jsonfile_prefix is None:
             tmp_dir = tempfile.TemporaryDirectory()

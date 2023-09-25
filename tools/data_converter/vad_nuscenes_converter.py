@@ -201,8 +201,9 @@ def _fill_trainval_infos(nusc,
                          val_scenes,
                          test=False,
                          max_sweeps=10,
-                         fut_ts=6,
-                         his_ts=2):
+                         fut_ts=12,
+                         his_ts=6,
+                         past_ts=6):
     """Generate the train/val infos from the raw data.
 
     Args:
@@ -358,6 +359,8 @@ def _fill_trainval_infos(nusc,
             gt_fut_trajs = np.zeros((num_box, fut_ts, 2))
             gt_fut_yaw = np.zeros((num_box, fut_ts))
             gt_fut_masks = np.zeros((num_box, fut_ts))
+            gt_past_trajs = np.zeros((num_box, past_ts+1, 2))
+            gt_past_masks = np.zeros((num_box, past_ts+1))
             gt_boxes_yaw = -(gt_boxes[:,6] + np.pi / 2)
             # agent lcf feat (x, y, yaw, vx, vy, width, length, height, type)
             agent_lcf_feat = np.zeros((num_box, 9))
@@ -365,6 +368,7 @@ def _fill_trainval_infos(nusc,
             for i, anno in enumerate(annotations):
                 cur_box = boxes[i]
                 cur_anno = anno
+                cur_anno_1 = anno
                 agent_lcf_feat[i, 0:2] = cur_box.center[:2]	
                 agent_lcf_feat[i, 2] = gt_boxes_yaw[i]
                 agent_lcf_feat[i, 3:5] = velocity[i]
@@ -394,6 +398,37 @@ def _fill_trainval_infos(nusc,
                         cur_box = box_next
                     else:
                         gt_fut_trajs[i, j:] = 0
+                        break
+                # add cur pose
+                box_next = Box(
+                    cur_anno_1['translation'], cur_anno_1['size'], Quaternion(cur_anno_1['rotation'])
+                )
+                # Move box global to ego vehicle coord system.
+                box_next.translate(-np.array(pose_record['translation']))
+                box_next.rotate(Quaternion(pose_record['rotation']).inverse)
+                #  Move box ego to sensor coord system（lidar）.
+                box_next.translate(-np.array(cs_record['translation']))
+                box_next.rotate(Quaternion(cs_record['rotation']).inverse)
+                gt_past_trajs[i, 0] = box_next.center[:2] - cur_box.center[:2]
+                gt_past_masks[i, 0] = 1
+                for k in range(past_ts):
+                    k = k+1
+                    if cur_anno_1['prev'] != '':
+                        anno_next = nusc.get('sample_annotation', cur_anno_1['prev'])
+                        box_next = Box(
+                            anno_next['translation'], anno_next['size'], Quaternion(anno_next['rotation'])
+                        )
+                        # Move box global to ego vehicle coord system.
+                        box_next.translate(-np.array(pose_record['translation']))
+                        box_next.rotate(Quaternion(pose_record['rotation']).inverse)
+                        #  Move box ego to sensor coord system（lidar）.
+                        box_next.translate(-np.array(cs_record['translation']))
+                        box_next.rotate(Quaternion(cs_record['rotation']).inverse)
+                        gt_past_trajs[i, k] = box_next.center[:2] - cur_box.center[:2]
+                        gt_past_masks[i, k] = 1
+                        cur_anno_1 = anno_next
+                    else:
+                        gt_past_trajs[i, k:] = 0
                         break
                 # get agent goal
                 gt_fut_coords = np.cumsum(gt_fut_trajs[i], axis=-2)
@@ -528,6 +563,8 @@ def _fill_trainval_infos(nusc,
             info['valid_flag'] = valid_flag
             info['gt_agent_fut_trajs'] = gt_fut_trajs.reshape(-1, fut_ts*2).astype(np.float32)
             info['gt_agent_fut_masks'] = gt_fut_masks.reshape(-1, fut_ts).astype(np.float32)
+            info['gt_agent_past_trajs'] = gt_past_trajs.reshape(-1, (past_ts+1)*2).astype(np.float32)
+            info['gt_agent_past_masks'] = gt_past_masks.reshape(-1, past_ts+1).astype(np.float32)
             info['gt_agent_lcf_feat'] = agent_lcf_feat.astype(np.float32)
             info['gt_agent_fut_yaw'] = gt_fut_yaw.astype(np.float32)
             info['gt_agent_fut_goal'] = gt_fut_goal.astype(np.float32)

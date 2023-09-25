@@ -12,6 +12,7 @@ import mmcv
 import os
 import time
 import torch
+torch.autograd.set_detect_anomaly(True)
 import shutil
 import warnings
 from mmcv import Config, DictAction

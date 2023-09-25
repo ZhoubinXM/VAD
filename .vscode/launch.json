@@ -21,6 +21,59 @@
       ]
     },
     {
+      "name": "TRAIN ADMS",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/tools/train.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "args":[
+        "projects/configs/ADMS/adms_tiny_stage_1.py",
+        "--work-dir",
+        "outputs/debug_adms_stage_1",
+        "--gpu-ids",
+        "0",
+        "--cfg-options",
+        "data.train.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_2_3_infos_temporal_train.pkl'",
+        "data.val.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_2_3_infos_temporal_val.pkl'",
+        "data.test.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_2_3_infos_temporal_val.pkl'"
+
+      ]
+    },
+    {
+      "name": "EVAL ADMS",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/tools/test.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "args":[
+        "projects/configs/ADMS/adms_tiny_stage_1.py",
+        // "ckpts/VAD_tiny.pth",
+        "outputs/adms_tiny_stage_1/epoch_1.pth",
+        "--out",
+        "outputs/adms_tiny_stage_1/res.pkl",
+        "--gpu-collect",
+        "--launcher", 
+        "none",  // for single test
+        "--eval", 
+        "bbox", 
+        "--tmpdir", 
+        "tmp",
+        "--cfg-options",
+        "data.train.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_2_3_infos_temporal_train.pkl'",
+        "data.val.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_2_3_infos_temporal_val.pkl'",
+        "data.val.map_ann_file='data/nuscenes/trainval/infos/nuscenes_map_mini_val.pkl'",
+        "data.test.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_2_3_infos_temporal_val.pkl'",
+        "data.test.map_ann_file='data/nuscenes/trainval/infos/nuscenes_map_mini_val.pkl'",
+        // "data.train.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_2_3_infos_temporal_train.pkl'",
+        // "data.val.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_2_3_infos_temporal_val.pkl'",
+        // "data.val.map_ann_file='data/nuscenes/trainval/infos/nuscenes_map_val.pkl'",
+        // "data.test.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_2_3_infos_temporal_val.pkl'",
+        // "data.test.map_ann_file='data/nuscenes/trainval/infos/nuscenes_map_val.pkl'",
+      ]
+    },
+    {
       "name": "EVAL",
       "type": "python",
       "request": "launch",
@@ -41,11 +94,28 @@
         "bbox", 
         "--tmpdir", 
         "tmp",
-        // "--cfg-options",
-        // "data.train.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_train.pkl'",
-        // "data.val.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_val.pkl'",
-        // "data.test.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_val.pkl'"
+        "--cfg-options",
+        "data.train.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_train.pkl'",
+        "data.val.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_val.pkl'",
+        "data.val.map_ann_file='data/nuscenes/trainval/infos/nuscenes_map_mini_val.pkl'",
+        "data.test.ann_file='data/nuscenes/trainval/infos/vad_nuscenes_mini_infos_temporal_val.pkl'",
+        "data.test.map_ann_file='data/nuscenes/trainval/infos/nuscenes_map_mini_val.pkl'",
 
+
+      ]
+    },
+    {
+      "name": "VIZ",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/tools/analysis_tools/visualization.py",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "args":[
+        "--result-path",
+        "/home/jerome.zhou/VAD/test/VAD_tiny_stage_1/Wed_Sep_20_10_00_16_2023/pts_bbox/results_nusc.pkl",
+        "--save-path",
+        "/home/jerome.zhou/VAD/test/VAD_tiny_stage_1/Wed_Sep_20_10_00_16_2023/pts_bbox/plots",
       ]
     },
     {
@@ -62,7 +132,7 @@
         "--out-dir",
         "./data/nuscenes/trainval/infos",
         "--extra-tag",
-        "vad_nuscenes_mini",
+        "vad_nuscenes_mini_2_3",
         "--version",
         "v1.0-mini",
         "--canbus",

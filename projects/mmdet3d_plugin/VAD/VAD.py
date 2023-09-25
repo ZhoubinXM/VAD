@@ -50,6 +50,7 @@ class VAD(MVXTwoStageDetector):
         self.fut_ts = fut_ts
         self.fut_mode = fut_mode
         self.valid_fut_ts = pts_bbox_head['valid_fut_ts']
+        self.use_planning = pts_bbox_head['use_planning']
 
         # temporal
         self.video_test_mode = video_test_mode
@@ -141,7 +142,7 @@ class VAD(MVXTwoStageDetector):
         Returns:
             dict: Losses of each branch.
         """
-
+        [img_meta.update({'gt_attr_labels': gt_attr_labels[i]}) for i, img_meta in enumerate(img_metas)]
         outs = self.pts_bbox_head(pts_feats, img_metas, prev_bev,
                                   ego_his_trajs=ego_his_trajs, ego_lcf_feat=ego_lcf_feat)
         loss_inputs = [
@@ -168,6 +169,8 @@ class VAD(MVXTwoStageDetector):
         if return_loss:
             return self.forward_train(**kwargs)
         else:
+            if kwargs['gt_attr_labels'][0][0].shape[0] == 0:
+                return []
             return self.forward_test(**kwargs)
     
     def obtain_history_bev(self, imgs_queue, img_metas_list):
@@ -382,6 +385,7 @@ class VAD(MVXTwoStageDetector):
             'trailer', 'barrier', 'motorcycle', 'bicycle', 
             'pedestrian', 'traffic_cone'
         ]
+        [img_meta.update({'gt_attr_labels': gt_attr_labels[0][i]}) for i, img_meta in enumerate(img_metas)]
 
         outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev,
                                   ego_his_trajs=ego_his_trajs, ego_lcf_feat=ego_lcf_feat)
@@ -413,16 +417,20 @@ class VAD(MVXTwoStageDetector):
             bbox_result['boxes_3d'] = bbox_result['boxes_3d'][mask]
             bbox_result['scores_3d'] = bbox_result['scores_3d'][mask]
             bbox_result['labels_3d'] = bbox_result['labels_3d'][mask]
-            bbox_result['trajs_3d'] = bbox_result['trajs_3d'][mask]
+            if self.use_planning:
+                bbox_result['trajs_3d'] = bbox_result['trajs_3d'][mask]                
 
             matched_bbox_result = self.assign_pred_to_gt_vip3d(
                 bbox_result, gt_bbox, gt_label)
-
+            
+            if not self.use_planning:
+                matched_bbox_result = matched_bbox_result.new_ones([*matched_bbox_result.shape])
             metric_dict = self.compute_motion_metric_vip3d(
                 gt_bbox, gt_label, gt_attr_label, bbox_result,
                 matched_bbox_result, mapped_class_names)
 
             # ego planning metric
+            # if self.use_planning:
             assert ego_fut_trajs.shape[0] == 1, 'only support batch_size=1 for testing'
             ego_fut_preds = bbox_result['ego_fut_preds']
             ego_fut_trajs = ego_fut_trajs[0, 0]
@@ -549,7 +557,7 @@ class VAD(MVXTwoStageDetector):
 
         veh_list = [0,1,3,4]
         ignore_list = ['construction_vehicle', 'barrier',
-                       'traffic_cone', 'motorcycle', 'bicycle']
+                       'traffic_cone', 'motorcycle', 'bicycle'] # 统计指标时忽略的类别
 
         for i in range(pred_bbox['labels_3d'].shape[0]):
             pred_bbox['labels_3d'][i] = 0 if pred_bbox['labels_3d'][i] in veh_list else pred_bbox['labels_3d'][i]
@@ -559,10 +567,10 @@ class VAD(MVXTwoStageDetector):
             if i not in matched_bbox_result:
                 metric_dict['fp_'+box_name] += 1
 
-        for i in range(gt_label.shape[0]):
+        for i in range(gt_label.shape[0]): # A
             gt_label[i] = 0 if gt_label[i] in veh_list else gt_label[i]
             box_name = mapped_class_names[gt_label[i]]
-            if box_name in ignore_list:
+            if box_name in ignore_list: # 这里决定了要计算的类别指标
                 continue
             gt_fut_masks = gt_attr_label[i][self.fut_ts*2:self.fut_ts*3]
             num_valid_ts = sum(gt_fut_masks==1)
@@ -573,12 +581,19 @@ class VAD(MVXTwoStageDetector):
                 m_pred_idx = matched_bbox_result[i]
                 gt_fut_trajs = gt_attr_label[i][:self.fut_ts*2].reshape(-1, 2)
                 gt_fut_trajs = gt_fut_trajs[:num_valid_ts]
-                pred_fut_trajs = pred_bbox['trajs_3d'][m_pred_idx].reshape(self.fut_mode, self.fut_ts, 2)
+                if self.use_planning:
+                    pred_fut_trajs = pred_bbox['trajs_3d'][m_pred_idx].reshape(self.fut_mode, self.fut_ts, 2)
+                else:
+                    pred_fut_trajs = pred_bbox['trajs_3d'][i].reshape(self.fut_mode, self.fut_ts, 2)
                 pred_fut_trajs = pred_fut_trajs[:, :num_valid_ts, :]
                 gt_fut_trajs = gt_fut_trajs.cumsum(dim=-2)
-                pred_fut_trajs = pred_fut_trajs.cumsum(dim=-2)
-                gt_fut_trajs = gt_fut_trajs + gt_bbox[i].center[0, :2]
-                pred_fut_trajs = pred_fut_trajs + pred_bbox['boxes_3d'][int(m_pred_idx)].center[0, :2]
+                pred_fut_trajs = pred_fut_trajs.cumsum(dim=-2) # 累加
+                # TODO: check this 是否与training的时候一致
+                # gt_fut_trajs = gt_fut_trajs + gt_bbox[i].center[0, :2]
+                if self.use_planning:
+                    pred_fut_trajs = pred_fut_trajs + pred_bbox['boxes_3d'][int(m_pred_idx)].center[0, :2]
+                else:
+                    pred_fut_trajs = pred_fut_trajs
 
                 dist = torch.linalg.norm(gt_fut_trajs[None, :, :] - pred_fut_trajs, dim=-1)
                 ade = dist.sum(-1) / num_valid_ts
