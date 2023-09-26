@@ -736,7 +736,7 @@ if __name__ == '__main__':
     bevformer_results = mmcv.load(inference_result_path)
     sample_token_list = list(bevformer_results['results'].keys())
 
-    nusc = NuScenes(version='v1.0-trainval', dataroot='./data/nuscenes', verbose=True)
+    nusc = NuScenes(version='v1.0-mini', dataroot='./data/nuscenes/trainval', verbose=True)
     
     imgs = []
     fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
@@ -904,7 +904,7 @@ if __name__ == '__main__':
         size = (2133, 800)
         cam_img = cv2.resize(cam_img, size)
         vis_img = cv2.hconcat([cam_img, sample_img])
-
+        cv2.imwrite(out_path+f"/{sample_token}.png", vis_img)
         video.write(vis_img)
     
     video.release()
